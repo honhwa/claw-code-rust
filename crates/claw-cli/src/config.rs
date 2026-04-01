@@ -28,10 +28,10 @@ pub struct ResolvedProvider {
 // Config file I/O
 // ---------------------------------------------------------------------------
 
-/// `~/.claude/config.json`
+/// `~/.claw-code-rust/config.json`
 pub fn config_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("could not determine home directory")?;
-    Ok(home.join(".claude").join("config.json"))
+    Ok(home.join(".claw-code-rust").join("config.json"))
 }
 
 pub fn load_config() -> Result<AppConfig> {

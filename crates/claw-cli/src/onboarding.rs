@@ -7,7 +7,7 @@ use crate::config::{save_config, AppConfig};
 /// Run the first-time interactive setup wizard.
 ///
 /// Asks the user to pick a provider and enter credentials.
-/// Saves the result to `~/.claude/config.json`.
+/// Saves the result to `~/.claw-code-rust/config.json`.
 pub fn run_onboarding() -> Result<AppConfig> {
     println!("╔══════════════════════════════════════════╗");
     println!("║      Welcome to Claw RS!                 ║");
@@ -32,7 +32,7 @@ pub fn run_onboarding() -> Result<AppConfig> {
 
     save_config(&config)?;
     println!();
-    println!("Config saved. You can change it later by editing ~/.claude/config.json");
+    println!("Config saved. You can change it later by editing ~/.claw-code-rust/config.json");
     println!("or by setting environment variables (ANTHROPIC_API_KEY, etc.).");
     println!();
 
