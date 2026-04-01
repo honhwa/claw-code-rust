@@ -58,7 +58,7 @@ struct Cli {
     query: Option<String>,
 
     /// Run a single prompt non-interactively then exit (alias for --query)
-    #[arg(short = 'p', long)]
+    #[arg(long)]
     print: Option<String>,
 
     /// Output format for non-interactive mode: text (default), stream-json, json
