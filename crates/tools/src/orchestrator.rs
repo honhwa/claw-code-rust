@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use clawcr_permissions::{PermissionDecision, PermissionRequest, ResourceKind};
+use clawcr_safety::legacy_permissions::{PermissionDecision, PermissionRequest, ResourceKind};
 
 use crate::{ToolContext, ToolOutput, ToolRegistry};
 
@@ -144,7 +144,7 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use clawcr_permissions::{PermissionMode, RuleBasedPolicy};
+    use clawcr_safety::legacy_permissions::{PermissionMode, RuleBasedPolicy};
 
     use crate::{Tool, ToolContext, ToolOutput};
 

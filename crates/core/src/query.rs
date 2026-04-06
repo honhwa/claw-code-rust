@@ -14,7 +14,14 @@ pub enum QueryEvent {
     /// Incremental text from the assistant.
     TextDelta(String),
     /// The assistant started a tool call.
-    ToolUseStart { id: String, name: String },
+    ToolUseStart {
+        /// Stable provider-issued tool use identifier.
+        id: String,
+        /// Tool name selected by the model.
+        name: String,
+        /// Fully decoded tool input payload, when available.
+        input: serde_json::Value,
+    },
     /// A tool call completed.
     ToolResult {
         tool_use_id: String,
@@ -264,10 +271,6 @@ pub async fn query(
                     content: ResponseContent::ToolUse { id, name, .. },
                     ..
                 }) => {
-                    emit(QueryEvent::ToolUseStart {
-                        id: id.clone(),
-                        name: name.clone(),
-                    });
                     tool_uses.push((id, name, String::new()));
                 }
                 Ok(StreamEvent::InputJsonDelta { partial_json, .. }) => {
@@ -316,6 +319,11 @@ pub async fn query(
             .map(|(id, name, json_str)| {
                 let input = serde_json::from_str(&json_str)
                     .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                emit(QueryEvent::ToolUseStart {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                });
                 assistant_content.push(ContentBlock::ToolUse {
                     id: id.clone(),
                     name: name.clone(),
@@ -349,7 +357,7 @@ pub async fn query(
         // Execute tool calls
         let tool_ctx = ToolContext {
             cwd: session.cwd.clone(),
-            permissions: Arc::new(clawcr_permissions::RuleBasedPolicy::new(
+            permissions: Arc::new(clawcr_safety::legacy_permissions::RuleBasedPolicy::new(
                 session.config.permission_mode,
             )),
             session_id: session.id.clone(),
@@ -394,10 +402,10 @@ mod tests {
     use futures::Stream;
     use serde_json::json;
 
-    use clawcr_permissions::PermissionMode;
     use clawcr_provider::{
         ModelRequest, ModelResponse, ResponseContent, StopReason, StreamEvent, Usage,
     };
+    use clawcr_safety::legacy_permissions::PermissionMode;
     use clawcr_tools::{Tool, ToolOrchestrator, ToolOutput, ToolRegistry};
 
     use super::query;
