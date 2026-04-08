@@ -733,7 +733,10 @@ impl ServerRuntime {
             session.summary.status = SessionRuntimeStatus::Idle;
             session.summary.updated_at = Utc::now();
             let totals = session.core_session.try_lock().ok().map(|core_session| {
-                (core_session.total_input_tokens, core_session.total_output_tokens)
+                (
+                    core_session.total_input_tokens,
+                    core_session.total_output_tokens,
+                )
             });
             if let Some((total_input_tokens, total_output_tokens)) = totals {
                 session.summary.total_input_tokens = total_input_tokens;
@@ -1051,7 +1054,12 @@ impl ServerRuntime {
             latest_usage
         });
 
-        let (result, first_assistant_reply, session_total_input_tokens, session_total_output_tokens) = {
+        let (
+            result,
+            first_assistant_reply,
+            session_total_input_tokens,
+            session_total_output_tokens,
+        ) = {
             let core_session = {
                 let session = session_arc.lock().await;
                 Arc::clone(&session.core_session)

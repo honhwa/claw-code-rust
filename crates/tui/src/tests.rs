@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use clawcr_core::{BuiltinModelCatalog, ProviderKind, SessionId};
+use clawcr_core::{BuiltinModelCatalog, ModelConfig, ModelVisibility, ProviderKind, SessionId};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use pretty_assertions::assert_eq;
 use ratatui::layout::Rect;
@@ -331,9 +331,9 @@ async fn onboarding_model_picker_enter_on_custom_row_starts_custom_flow() {
         .aux_panel
         .as_ref()
         .and_then(|panel| match &panel.content {
-            AuxPanelContent::ModelList(entries) => entries
-                .iter()
-                .position(|entry| entry.is_custom_mode),
+            AuxPanelContent::ModelList(entries) => {
+                entries.iter().position(|entry| entry.is_custom_mode)
+            }
             _ => None,
         })
         .expect("custom row should exist");
@@ -345,6 +345,47 @@ async fn onboarding_model_picker_enter_on_custom_row_starts_custom_flow() {
 
     assert!(app.onboarding_custom_model_pending);
     assert_eq!(app.onboarding_prompt.as_deref(), Some("model name"));
+    assert!(app.aux_panel.is_none());
+}
+
+#[tokio::test]
+async fn onboarding_model_picker_enter_on_builtin_row_prompts_for_connection() {
+    let mut app = test_app();
+    app.show_model_onboarding = true;
+    app.saved_models = vec![SavedModelEntry {
+        model: "existing-model".to_string(),
+        base_url: Some("https://example.invalid/v1".to_string()),
+        api_key: Some("secret".to_string()),
+    }];
+    app.model_catalog = BuiltinModelCatalog::new(vec![ModelConfig {
+        slug: "new-anthropic-model".to_string(),
+        display_name: "New Anthropic Model".to_string(),
+        provider: ProviderKind::Anthropic,
+        description: Some("test model".to_string()),
+        visibility: ModelVisibility::Visible,
+        ..ModelConfig::default()
+    }]);
+    app.show_model_panel();
+    app.aux_panel_selection = app
+        .aux_panel
+        .as_ref()
+        .and_then(|panel| match &panel.content {
+            AuxPanelContent::ModelList(entries) => entries
+                .iter()
+                .position(|entry| entry.slug == "new-anthropic-model"),
+            _ => None,
+        })
+        .expect("builtin row should exist");
+
+    app.handle_key(
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        Rect::default(),
+    );
+
+    assert!(!app.onboarding_custom_model_pending);
+    assert!(app.onboarding_base_url_pending);
+    assert_eq!(app.onboarding_selected_model.as_deref(), Some("new-anthropic-model"));
+    assert_eq!(app.onboarding_prompt.as_deref(), Some("base url"));
     assert!(app.aux_panel.is_none());
 }
 

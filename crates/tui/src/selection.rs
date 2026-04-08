@@ -189,6 +189,10 @@ impl TuiApp {
         }
     }
 
+    pub(crate) fn saved_model_entry(&self, model: &str) -> Option<&SavedModelEntry> {
+        self.saved_models.iter().find(|entry| entry.model == model)
+    }
+
     pub(crate) fn handle_slash_command(&mut self, prompt: String) -> Result<()> {
         let trimmed = prompt.trim();
         let mut parts = trimmed.splitn(2, char::is_whitespace);
@@ -360,6 +364,21 @@ impl TuiApp {
         self.input.clear();
     }
 
+    pub(crate) fn begin_model_credentials_onboarding(&mut self, model: String) {
+        self.aux_panel = None;
+        self.aux_panel_selection = 0;
+        self.onboarding_custom_model_pending = false;
+        self.onboarding_base_url_pending = true;
+        self.onboarding_api_key_pending = false;
+        self.onboarding_selected_model = Some(model);
+        self.onboarding_selected_model_is_custom = false;
+        self.onboarding_selected_base_url = None;
+        self.onboarding_selected_api_key = None;
+        self.onboarding_prompt = Some("base url".to_string());
+        self.status_message.clear();
+        self.input.clear();
+    }
+
     pub(crate) fn exit_onboarding(&mut self) {
         self.show_model_onboarding = false;
         self.aux_panel = None;
@@ -519,12 +538,16 @@ impl TuiApp {
                     }
                     return true;
                 }
-                let Some(saved_model) = self
-                    .saved_models
-                    .iter()
-                    .find(|entry| entry.model == selected.slug)
-                    .cloned()
-                else {
+                // Only an exact saved model slug should bypass onboarding.
+                // Having other entries in config.toml must not suppress the
+                // connection setup for a newly selected model.
+                if self.show_model_onboarding
+                    && self.saved_model_entry(&selected.slug).is_none()
+                {
+                    self.begin_model_credentials_onboarding(selected.slug.clone());
+                    return true;
+                }
+                let Some(saved_model) = self.saved_model_entry(&selected.slug).cloned() else {
                     if let Err(error) = self.set_model(selected.slug.clone()) {
                         self.push_item(
                             TranscriptItemKind::Error,
