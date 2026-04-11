@@ -1,0 +1,46 @@
+Executes a shell command in a persistent shell session with optional timeout.
+
+Environment: OS: ${os}, Shell: ${shell}, Workspace: ${directory}
+
+All commands run in the current working directory by default. Use the `workdir` parameter if you need a different directory. Do not use `cd <directory> && <command>` when `workdir` is sufficient.
+
+Platform rules:
+- On Windows, write commands for PowerShell by default. Do not assume GNU/Bash tools exist.
+- On Windows, prefer PowerShell cmdlets and syntax such as `Get-ChildItem`, `Get-Content`, `Select-String`, `Measure-Object`, `Where-Object`, and `$env:NAME`.
+- On Windows, do not default to `cmd /c ...`. Only use `cmd.exe` when the user explicitly asks for it or a command genuinely requires it.
+- On Windows, do not use Bash syntax like `find ... | wc -l`, `ls`, `cat`, `grep`, or `&&` unless the user explicitly asks for a POSIX shell and that shell is actually available.
+- On macOS and Linux, standard POSIX shell syntax is acceptable.
+
+IMPORTANT: This tool is for terminal operations like git, cargo, npm, docker, build tools, test runners, and package managers. Do not use it for file operations that already have dedicated tools.
+
+Prefer the specialized tools when possible:
+- File search: use `glob`
+- Content search: use `grep`
+- Read files: use `read`
+- Edit files: use `edit`
+- Write files: use `write`
+- Patch files: use `apply_patch`
+
+Command guidance:
+- Always quote paths that contain spaces.
+- Use the `description` field with a short 5-10 word summary whenever possible.
+- If you need several independent commands, make several tool calls in parallel.
+- Use `;` only when commands must run sequentially and earlier failure should not stop later commands.
+- Do not use newlines to separate commands unless the shell syntax itself requires them.
+
+Windows examples:
+- Count files under `crates`: `Get-ChildItem crates -Recurse -File | Measure-Object | Select-Object -ExpandProperty Count`
+- Search TODOs: `Get-ChildItem -Path crates -Recurse -File | Select-String -Pattern 'TODO'`
+- Read environment variable: `$env:PATH`
+
+POSIX examples:
+- Count files under `crates`: `find crates -type f | wc -l`
+- Search TODOs: `find crates -type f | xargs grep -n TODO`
+
+Output notes:
+- Large output is truncated automatically at about ${maxBytes} bytes for display. Ask follow-up questions or use the dedicated tools instead of manually truncating with `head` or `tail`.
+
+Git safety:
+- Only create commits when the user explicitly asks.
+- Do not push unless the user explicitly asks.
+- Do not use destructive git operations unless the user explicitly asks.

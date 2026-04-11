@@ -16,6 +16,11 @@ use clawcr_server::{
 
 use crate::events::{SessionListEntry, TranscriptItem, TranscriptItemKind, WorkerEvent};
 
+struct EnsureSessionOutcome {
+    session_id: SessionId,
+    resolved_model: Option<String>,
+}
+
 /// Immutable runtime configuration used to construct the background server client worker.
 pub(crate) struct QueryWorkerConfig {
     /// Model identifier used for new turns.
@@ -29,7 +34,7 @@ pub(crate) struct QueryWorkerConfig {
 }
 
 /// Commands accepted by the background query worker.
-enum WorkerCommand {
+enum OperationCommand {
     /// Submit a new user prompt to the session.
     SubmitPrompt(String),
     /// Update the model used for future turns.
@@ -68,7 +73,7 @@ enum WorkerCommand {
 /// Handle used by the UI thread to interact with the background query worker.
 pub(crate) struct QueryWorkerHandle {
     /// Sender used to submit commands to the worker.
-    command_tx: mpsc::UnboundedSender<WorkerCommand>,
+    command_tx: mpsc::UnboundedSender<OperationCommand>,
     /// Receiver used by the UI to consume worker events.
     pub(crate) event_rx: mpsc::UnboundedReceiver<WorkerEvent>,
     /// Background task running the worker loop.
@@ -91,21 +96,21 @@ impl QueryWorkerHandle {
     /// Submits one prompt to the worker.
     pub(crate) fn submit_prompt(&self, prompt: String) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::SubmitPrompt(prompt))
+            .send(OperationCommand::SubmitPrompt(prompt))
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
     /// Updates the active session model for future turns.
     pub(crate) fn set_model(&self, model: String) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::SetModel(model))
+            .send(OperationCommand::SetModel(model))
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
     /// Updates the thinking mode used for future turns.
     pub(crate) fn set_thinking(&self, thinking: Option<String>) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::SetThinking(thinking))
+            .send(OperationCommand::SetThinking(thinking))
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
@@ -117,7 +122,7 @@ impl QueryWorkerHandle {
         api_key: Option<String>,
     ) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::ReconfigureProvider {
+            .send(OperationCommand::ReconfigureProvider {
                 model,
                 base_url,
                 api_key,
@@ -133,7 +138,7 @@ impl QueryWorkerHandle {
         api_key: Option<String>,
     ) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::ValidateProvider {
+            .send(OperationCommand::ValidateProvider {
                 model,
                 base_url,
                 api_key,
@@ -144,43 +149,46 @@ impl QueryWorkerHandle {
     /// Requests the current persisted session list from the background worker.
     pub(crate) fn list_sessions(&self) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::ListSessions)
+            .send(OperationCommand::ListSessions)
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
     /// Clears the active session so the next submitted prompt starts a fresh one lazily.
     pub(crate) fn start_new_session(&self) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::StartNewSession)
+            .send(OperationCommand::StartNewSession)
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
     /// Switches the active session to a persisted session identifier.
     pub(crate) fn switch_session(&self, session_id: SessionId) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::SwitchSession(session_id))
+            .send(OperationCommand::SwitchSession(session_id))
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
     /// Renames the current active session.
     pub(crate) fn rename_session(&self, title: String) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::RenameSession(title))
+            .send(OperationCommand::RenameSession(title))
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
     /// Interrupts the active turn when one exists.
     pub(crate) fn interrupt_turn(&self) -> Result<()> {
         self.command_tx
-            .send(WorkerCommand::InterruptTurn)
+            .send(OperationCommand::InterruptTurn)
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
     /// Stops the worker task and waits for it to finish.
     pub(crate) async fn shutdown(self) -> Result<()> {
-        let _ = self.command_tx.send(WorkerCommand::Shutdown);
-        let _ = self.join_handle.await.map_err(map_join_error);
-        Ok(())
+        let _ = self.command_tx.send(OperationCommand::Shutdown);
+        match self.join_handle.await {
+            Ok(()) => Ok(()),
+            Err(error) if error.is_cancelled() => Ok(()),
+            Err(error) => Err(map_join_error(error)),
+        }
     }
 }
 
@@ -200,7 +208,7 @@ impl QueryWorkerHandle {
 
 async fn run_worker(
     config: QueryWorkerConfig,
-    mut command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
+    mut command_rx: mpsc::UnboundedReceiver<OperationCommand>,
     event_tx: mpsc::UnboundedSender<WorkerEvent>,
 ) {
     if let Err(error) = run_worker_inner(config, &mut command_rx, &event_tx).await {
@@ -215,7 +223,7 @@ async fn run_worker(
 
 async fn run_worker_inner(
     config: QueryWorkerConfig,
-    command_rx: &mut mpsc::UnboundedReceiver<WorkerCommand>,
+    command_rx: &mut mpsc::UnboundedReceiver<OperationCommand>,
     event_tx: &mpsc::UnboundedSender<WorkerEvent>,
 ) -> Result<()> {
     // The worker owns the server client and translates UI commands into server
@@ -236,13 +244,18 @@ async fn run_worker_inner(
         tokio::select! {
             maybe_command = command_rx.recv() => {
                 match maybe_command {
-                    Some(WorkerCommand::SubmitPrompt(prompt)) => {
-                        let active_session_id = ensure_session_started(
+                    Some(OperationCommand::SubmitPrompt(prompt)) => {
+                        let session_start = ensure_session_started(
                             &mut client,
                             &config.cwd,
                             &model,
                             &mut session_id,
-                        ).await?;
+                        )
+                        .await?;
+                        if let Some(resolved_model) = session_start.resolved_model.clone() {
+                            model = resolved_model;
+                        }
+                        let active_session_id = session_start.session_id;
                         let start_result = client.turn_start(TurnStartParams {
                             session_id: active_session_id,
                             input: vec![InputItem::Text { text: prompt }],
@@ -266,13 +279,13 @@ async fn run_worker_inner(
                             }
                         }
                     }
-                    Some(WorkerCommand::SetModel(next_model)) => {
+                    Some(OperationCommand::SetModel(next_model)) => {
                         model = next_model;
                     }
-                    Some(WorkerCommand::SetThinking(next_thinking)) => {
+                    Some(OperationCommand::SetThinking(next_thinking)) => {
                         thinking_selection = next_thinking;
                     }
-                    Some(WorkerCommand::ValidateProvider {
+                    Some(OperationCommand::ValidateProvider {
                         model: next_model,
                         base_url,
                         api_key,
@@ -296,7 +309,7 @@ async fn run_worker_inner(
                             }
                         }
                     }
-                Some(WorkerCommand::ReconfigureProvider {
+                Some(OperationCommand::ReconfigureProvider {
                     model: next_model,
                     base_url,
                     api_key,
@@ -313,9 +326,14 @@ async fn run_worker_inner(
                         session_id = None;
                         active_turn_id = None;
                     }
-                    Some(WorkerCommand::ListSessions) => {
-                        match client.session_list(SessionListParams::default()).await {
-                            Ok(result) => {
+                    Some(OperationCommand::ListSessions) => {
+                        match tokio::time::timeout(
+                            Duration::from_secs(5),
+                            client.session_list(SessionListParams::default()),
+                        )
+                        .await
+                        {
+                            Ok(Ok(result)) => {
                                 let sessions = result
                                     .sessions
                                     .iter()
@@ -334,7 +352,7 @@ async fn run_worker_inner(
                                     .collect();
                                 let _ = event_tx.send(WorkerEvent::SessionsListed { sessions });
                             }
-                            Err(error) => {
+                            Ok(Err(error)) => {
                                 let _ = event_tx.send(WorkerEvent::TurnFailed {
                                     message: error.to_string(),
                                     turn_count,
@@ -342,14 +360,22 @@ async fn run_worker_inner(
                                     total_output_tokens,
                                 });
                             }
+                            Err(_) => {
+                                let _ = event_tx.send(WorkerEvent::TurnFailed {
+                                    message: "session list request timed out".to_string(),
+                                    turn_count,
+                                    total_input_tokens,
+                                    total_output_tokens,
+                                });
+                            }
                         }
                     }
-                    Some(WorkerCommand::StartNewSession) => {
+                    Some(OperationCommand::StartNewSession) => {
                         active_turn_id = None;
                         session_id = None;
                         let _ = event_tx.send(WorkerEvent::NewSessionPrepared);
                     }
-                    Some(WorkerCommand::SwitchSession(next_session_id)) => {
+                    Some(OperationCommand::SwitchSession(next_session_id)) => {
                         match client
                             .session_resume(SessionResumeParams {
                                 session_id: next_session_id,
@@ -359,9 +385,6 @@ async fn run_worker_inner(
                             Ok(result) => {
                                 active_turn_id = None;
                                 session_id = Some(next_session_id);
-                                if let Some(next_model) = result.session.resolved_model.clone() {
-                                    model = next_model;
-                                }
                                 let _ = event_tx.send(WorkerEvent::SessionSwitched {
                                     session_id: next_session_id.to_string(),
                                     title: result.session.title,
@@ -384,7 +407,7 @@ async fn run_worker_inner(
                             }
                         }
                     }
-                    Some(WorkerCommand::RenameSession(title)) => {
+                    Some(OperationCommand::RenameSession(title)) => {
                         let Some(active_session_id) = session_id else {
                             let _ = event_tx.send(WorkerEvent::TurnFailed {
                                 message: "no active session exists yet; send a prompt or switch to a saved session first".to_string(),
@@ -420,7 +443,7 @@ async fn run_worker_inner(
                             }
                         }
                     }
-                    Some(WorkerCommand::InterruptTurn) => {
+                    Some(OperationCommand::InterruptTurn) => {
                         if let (Some(turn_id), Some(active_session_id)) = (active_turn_id, session_id) {
                             if let Err(error) = client
                                 .turn_interrupt(TurnInterruptParams {
@@ -439,8 +462,7 @@ async fn run_worker_inner(
                             }
                         }
                     }
-                    Some(WorkerCommand::Shutdown) | None => {
-                        client.shutdown().await?;
+                    Some(OperationCommand::Shutdown) | None => {
                         break;
                     }
                 }
@@ -452,9 +474,12 @@ async fn run_worker_inner(
                             "turn/started" => {
                                 if let ServerEvent::TurnStarted(payload) = event {
                                     active_turn_id = Some(payload.turn.turn_id);
+                                    model = payload.turn.model_slug.clone();
+                                    let _ = event_tx.send(WorkerEvent::TurnStarted {
+                                        model: payload.turn.model_slug,
+                                    });
                                 }
                                 latest_completed_agent_message = None;
-                                let _ = event_tx.send(WorkerEvent::TurnStarted);
                             }
                             "item/agentMessage/delta" => {
                                 if let ServerEvent::ItemDelta { payload, .. } = event {
@@ -474,14 +499,14 @@ async fn run_worker_inner(
                             "turn/completed" => {
                                 if let ServerEvent::TurnCompleted(payload) = event {
                                     active_turn_id = None;
-                                    if let Some(usage) = &payload.turn.usage {
-                                        total_input_tokens += usage.input_tokens as usize;
-                                        total_output_tokens += usage.output_tokens as usize;
-                                    }
                                     let completed = payload.turn.status == TurnStatus::Completed
                                         || payload.turn.status == TurnStatus::Interrupted;
                                     if completed {
                                         turn_count += 1;
+                                        if let Some(usage) = &payload.turn.usage {
+                                            total_input_tokens = usage.input_tokens as usize;
+                                            total_output_tokens = usage.output_tokens as usize;
+                                        }
                                         let _ = event_tx.send(WorkerEvent::TurnFinished {
                                             stop_reason: format!("{:?}", payload.turn.status),
                                             turn_count,
@@ -492,16 +517,26 @@ async fn run_worker_inner(
                                     }
                                 }
                             }
+                            "turn/usage/updated" => {
+                                if let ServerEvent::TurnUsageUpdated(payload) = event {
+                                    total_input_tokens = payload.total_input_tokens;
+                                    total_output_tokens = payload.total_output_tokens;
+                                    let _ = event_tx.send(WorkerEvent::UsageUpdated {
+                                        total_input_tokens: payload.total_input_tokens,
+                                        total_output_tokens: payload.total_output_tokens,
+                                    });
+                                }
+                            }
                             "turn/failed" => {
                                 if let ServerEvent::TurnFailed(TurnEventPayload { turn, .. }) = event {
                                     active_turn_id = None;
-                                    if let Some(usage) = &turn.usage {
-                                        total_input_tokens += usage.input_tokens as usize;
-                                        total_output_tokens += usage.output_tokens as usize;
-                                    }
                                     let message = latest_completed_agent_message
                                         .take()
                                         .unwrap_or_else(|| format!("turn failed with status {:?}", turn.status));
+                                    if let Some(usage) = &turn.usage {
+                                        total_input_tokens = usage.input_tokens as usize;
+                                        total_output_tokens = usage.output_tokens as usize;
+                                    }
                                     let _ = event_tx.send(WorkerEvent::TurnFailed {
                                         message,
                                         turn_count,
@@ -529,6 +564,7 @@ async fn run_worker_inner(
         }
     }
 
+    client.shutdown().await?;
     Ok(())
 }
 
@@ -537,9 +573,12 @@ async fn ensure_session_started(
     cwd: &PathBuf,
     model: &str,
     session_id: &mut Option<SessionId>,
-) -> Result<SessionId> {
+) -> Result<EnsureSessionOutcome> {
     if let Some(session_id) = session_id {
-        return Ok(*session_id);
+        return Ok(EnsureSessionOutcome {
+            session_id: *session_id,
+            resolved_model: Some(model.to_string()),
+        });
     }
 
     let session = client
@@ -551,7 +590,10 @@ async fn ensure_session_started(
         })
         .await?;
     *session_id = Some(session.session_id);
-    Ok(session.session_id)
+    Ok(EnsureSessionOutcome {
+        session_id: session.session_id,
+        resolved_model: session.resolved_model,
+    })
 }
 
 async fn spawn_client(cwd: &PathBuf, env: Vec<(String, String)>) -> Result<StdioServerClient> {
@@ -604,12 +646,21 @@ fn handle_completed_item(payload: ItemEventPayload, event_tx: &mpsc::UnboundedSe
             payload,
             ..
         } => {
+            let tool_use_id = payload
+                .get("tool_use_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
             let summary = summarize_tool_call(&payload);
             let detail = payload
                 .get("input")
                 .map(render_json_preview)
                 .filter(|detail| !detail.is_empty());
-            let _ = event_tx.send(WorkerEvent::ToolCall { summary, detail });
+            let _ = event_tx.send(WorkerEvent::ToolCall {
+                tool_use_id,
+                summary,
+                detail,
+            });
         }
         ItemEnvelope {
             item_kind: ItemKind::ToolResult,
@@ -624,7 +675,13 @@ fn handle_completed_item(payload: ItemEventPayload, event_tx: &mpsc::UnboundedSe
                 .get("is_error")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
+            let tool_use_id = payload
+                .get("tool_use_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
             let _ = event_tx.send(WorkerEvent::ToolResult {
+                tool_use_id,
                 preview: content,
                 is_error,
                 truncated: false,
@@ -635,19 +692,53 @@ fn handle_completed_item(payload: ItemEventPayload, event_tx: &mpsc::UnboundedSe
 }
 
 fn project_history_items(items: &[SessionHistoryItem]) -> Vec<TranscriptItem> {
-    items
-        .iter()
-        .map(|item| {
-            let kind = match item.kind {
-                SessionHistoryItemKind::User => TranscriptItemKind::User,
-                SessionHistoryItemKind::Assistant => TranscriptItemKind::Assistant,
-                SessionHistoryItemKind::ToolCall => TranscriptItemKind::ToolCall,
-                SessionHistoryItemKind::ToolResult => TranscriptItemKind::ToolResult,
-                SessionHistoryItemKind::Error => TranscriptItemKind::Error,
-            };
-            TranscriptItem::new(kind, item.title.clone(), item.body.clone())
-        })
-        .collect()
+    let mut transcript = Vec::new();
+    let mut index = 0usize;
+
+    while index < items.len() {
+        let item = &items[index];
+        if item.kind == SessionHistoryItemKind::ToolCall {
+            if let Some(next) = items.get(index + 1) {
+                if matches!(
+                    next.kind,
+                    SessionHistoryItemKind::ToolResult | SessionHistoryItemKind::Error
+                ) {
+                    let merged = if next.kind == SessionHistoryItemKind::Error {
+                        TranscriptItem::tool_error(item.title.clone(), next.body.clone())
+                    } else {
+                        TranscriptItem::restored_tool_result(item.title.clone(), next.body.clone())
+                    };
+                    transcript.push(merged);
+                    index += 2;
+                    continue;
+                }
+            }
+        }
+
+        let kind = match item.kind {
+            SessionHistoryItemKind::User => TranscriptItemKind::User,
+            SessionHistoryItemKind::Assistant => TranscriptItemKind::Assistant,
+            SessionHistoryItemKind::ToolCall => TranscriptItemKind::ToolCall,
+            SessionHistoryItemKind::ToolResult => TranscriptItemKind::ToolResult,
+            SessionHistoryItemKind::Error => TranscriptItemKind::Error,
+        };
+        let transcript_item = match item.kind {
+            SessionHistoryItemKind::ToolCall => TranscriptItem::tool_call(item.title.clone()),
+            SessionHistoryItemKind::ToolResult => {
+                TranscriptItem::restored_tool_result(item.title.clone(), item.body.clone())
+            }
+            SessionHistoryItemKind::Error => {
+                TranscriptItem::tool_error(item.title.clone(), item.body.clone())
+            }
+            SessionHistoryItemKind::User | SessionHistoryItemKind::Assistant => {
+                TranscriptItem::new(kind, item.title.clone(), item.body.clone())
+            }
+        };
+        transcript.push(transcript_item);
+        index += 1;
+    }
+
+    transcript
 }
 
 fn summarize_tool_call(payload: &serde_json::Value) -> String {
@@ -656,14 +747,48 @@ fn summarize_tool_call(payload: &serde_json::Value) -> String {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("tool");
     let input = payload.get("input").unwrap_or(&serde_json::Value::Null);
-    match tool_name {
+    let detail = summarize_tool_input(tool_name, input);
+    if detail.is_empty() {
+        tool_name.to_string()
+    } else {
+        format!("{tool_name}: {detail}")
+    }
+}
+
+fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
+    let candidate = match tool_name {
         "bash" => input
             .get("command")
             .and_then(serde_json::Value::as_str)
-            .map(|command| format!("Ran {command}"))
-            .unwrap_or_else(|| "Ran shell command".to_string()),
-        other => format!("Ran {other}"),
+            .or_else(|| input.get("cmd").and_then(serde_json::Value::as_str)),
+        "read" => input
+            .get("filePath")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| input.get("path").and_then(serde_json::Value::as_str)),
+        "write" | "edit" | "apply_patch" => input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| input.get("filePath").and_then(serde_json::Value::as_str)),
+        "webfetch" | "websearch" => input
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| input.get("query").and_then(serde_json::Value::as_str)),
+        _ => None,
+    };
+
+    candidate
+        .map(|text| compact_tool_summary(text, 96))
+        .unwrap_or_else(|| compact_tool_summary(&render_json_preview(input), 96))
+}
+
+fn compact_tool_summary(text: &str, max_chars: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let truncated = compact.chars().count() > max_chars;
+    let mut out = compact.chars().take(max_chars).collect::<String>();
+    if truncated {
+        out.push('…');
     }
+    out
 }
 
 fn render_json_preview(value: &serde_json::Value) -> String {
@@ -836,8 +961,12 @@ mod tests {
     use clawcr_core::{SessionId, SessionTitleState};
     use clawcr_server::{SessionRuntimeStatus, SessionSummary};
 
-    use super::{normalize_display_output, summarize_tool_call, truncate_tool_output};
+    use super::{
+        normalize_display_output, project_history_items, summarize_tool_call, truncate_tool_output,
+    };
     use crate::events::SessionListEntry;
+    use crate::events::TranscriptItem;
+    use clawcr_server::{SessionHistoryItem, SessionHistoryItemKind};
 
     #[test]
     fn bash_tool_summary_uses_command_text() {
@@ -850,7 +979,7 @@ mod tests {
 
         assert_eq!(
             summarize_tool_call(&payload),
-            "Ran Get-Date -Format \"yyyy-MM-dd\""
+            "bash: Get-Date -Format \"yyyy-MM-dd\""
         );
     }
 
@@ -930,6 +1059,30 @@ mod tests {
         assert_eq!(
             normalize_display_output("\r\n\r\nhello\r\nworld\r\n\r\n"),
             "hello\nworld"
+        );
+    }
+
+    #[test]
+    fn project_history_merges_tool_call_and_result() {
+        let items = vec![
+            SessionHistoryItem {
+                kind: SessionHistoryItemKind::ToolCall,
+                title: "Ran powershell -Command \"Get-Date\"".to_string(),
+                body: String::new(),
+            },
+            SessionHistoryItem {
+                kind: SessionHistoryItemKind::ToolResult,
+                title: "Tool output".to_string(),
+                body: "2026-04-09".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            project_history_items(&items),
+            vec![TranscriptItem::restored_tool_result(
+                "Ran powershell -Command \"Get-Date\"",
+                "2026-04-09"
+            )]
         );
     }
 }

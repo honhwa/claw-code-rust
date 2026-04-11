@@ -6,34 +6,35 @@ use clawcr_safety::legacy_permissions::{PermissionDecision, PermissionRequest, R
 use serde_json::json;
 use tracing::info;
 
+const DESCRIPTION: &str = include_str!("write.txt");
+
 /// Write content to a file, creating directories as needed.
 pub struct FileWriteTool;
 
 #[async_trait]
 impl Tool for FileWriteTool {
     fn name(&self) -> &str {
-        "file_write"
+        "write"
     }
 
     fn description(&self) -> &str {
-        "Write content to a file. If the file exists, it will be overwritten. \
-         Parent directories are created automatically."
+        DESCRIPTION
     }
 
     fn input_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "path": {
+                "filePath": {
                     "type": "string",
-                    "description": "The file path to write (absolute or relative to cwd)"
+                    "description": "The absolute or relative file path to write"
                 },
                 "content": {
                     "type": "string",
                     "description": "The content to write to the file"
                 }
             },
-            "required": ["path", "content"]
+            "required": ["filePath", "content"]
         })
     }
 
@@ -42,9 +43,9 @@ impl Tool for FileWriteTool {
         ctx: &ToolContext,
         input: serde_json::Value,
     ) -> anyhow::Result<ToolOutput> {
-        let path_str = input["path"]
+        let path_str = input["filePath"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing 'path' field"))?;
+            .ok_or_else(|| anyhow::anyhow!("missing 'filePath' field"))?;
         let content = input["content"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'content' field"))?;
@@ -99,9 +100,5 @@ impl Tool for FileWriteTool {
 
 fn resolve_path(cwd: &std::path::Path, path: &str) -> PathBuf {
     let p = PathBuf::from(path);
-    if p.is_absolute() {
-        p
-    } else {
-        cwd.join(p)
-    }
+    if p.is_absolute() { p } else { cwd.join(p) }
 }

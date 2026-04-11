@@ -21,3 +21,10 @@ glob = { workspace = true }
 regex = { workspace = true }
 chrono = { workspace = true }
 smol_str = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true }
+base64 = "0.22"
+portable-pty = "0.9"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

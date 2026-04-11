@@ -2,25 +2,21 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
 use chrono::Utc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 use clawcr_core::{
-    query, ItemId, Message, QueryEvent, SessionId, SessionTitleFinalSource, SessionTitleState,
-    TextItem, ToolCallItem, ToolResultItem, TurnId, TurnItem, TurnStatus, TurnUsage, Worklog,
+    ItemId, Message, QueryEvent, SessionId, SessionTitleFinalSource, SessionTitleState, TextItem,
+    ToolCallItem, ToolResultItem, TurnId, TurnItem, TurnStatus, TurnUsage, Worklog, query,
 };
 use clawcr_tools::ToolOrchestrator;
 
 use crate::{
-    execution::{RuntimeSession, ServerRuntimeDependencies},
-    persistence::{build_item_record, build_turn_record, RolloutStore},
-    projection::history_item_from_turn_item,
-    titles::{build_title_generation_request, derive_provisional_title, normalize_generated_title},
     ClientTransportKind, ConnectionState, ErrorResponse, EventContext, EventsSubscribeParams,
     EventsSubscribeResult, InitializeParams, InitializeResult, ItemDeltaKind, ItemDeltaPayload,
     ItemEnvelope, ItemEventPayload, ItemKind, NotificationEnvelope, ProtocolError,
@@ -30,7 +26,11 @@ use crate::{
     SessionStartParams, SessionStartResult, SessionStatusChangedPayload, SessionTitleUpdateParams,
     SessionTitleUpdateResult, SteerInputRecord, SuccessResponse, TurnEventPayload,
     TurnInterruptParams, TurnInterruptResult, TurnStartParams, TurnStartResult, TurnSteerParams,
-    TurnSteerResult, TurnSummary,
+    TurnSteerResult, TurnSummary, TurnUsageUpdatedPayload,
+    execution::{RuntimeSession, ServerRuntimeDependencies},
+    persistence::{RolloutStore, build_item_record, build_turn_record},
+    projection::history_item_from_turn_item,
+    titles::{build_title_generation_request, derive_provisional_title, normalize_generated_title},
 };
 
 pub struct ServerRuntime {
@@ -73,6 +73,7 @@ impl ServerRuntime {
     /// Loads durable sessions from rollout files and installs them into the runtime map.
     pub async fn load_persisted_sessions(self: &Arc<Self>) -> anyhow::Result<()> {
         let sessions = self.rollout_store.load_sessions(&self.deps)?;
+        tracing::info!(session_count = sessions.len(), "loaded persisted sessions");
         let mut runtime_sessions = self.sessions.lock().await;
         runtime_sessions.extend(sessions);
         Ok(())
@@ -84,7 +85,8 @@ impl ServerRuntime {
         sender: mpsc::UnboundedSender<serde_json::Value>,
     ) -> u64 {
         let connection_id = self.next_connection_id.fetch_add(1, Ordering::SeqCst);
-        self.connections.lock().await.insert(
+        let mut connections = self.connections.lock().await;
+        connections.insert(
             connection_id,
             ConnectionRuntime {
                 transport,
@@ -95,11 +97,27 @@ impl ServerRuntime {
                 next_event_seq: 1,
             },
         );
+        tracing::info!(
+            connection_id,
+            transport = ?connections
+                .get(&connection_id)
+                .map(|connection| connection.transport.clone())
+                .expect("connection inserted"),
+            active_connections = connections.len(),
+            "registered client connection"
+        );
         connection_id
     }
 
     pub async fn unregister_connection(&self, connection_id: u64) {
-        self.connections.lock().await.remove(&connection_id);
+        let mut connections = self.connections.lock().await;
+        let removed = connections.remove(&connection_id);
+        tracing::info!(
+            connection_id,
+            transport = ?removed.as_ref().map(|connection| connection.transport.clone()),
+            active_connections = connections.len(),
+            "unregistered client connection"
+        );
     }
 
     pub async fn handle_incoming(
@@ -114,10 +132,18 @@ impl ServerRuntime {
             .cloned()
             .unwrap_or_else(|| serde_json::json!({}));
 
+        tracing::debug!(
+            connection_id,
+            method,
+            has_id = id.is_some(),
+            "received client message"
+        );
+
         if method == "initialized" {
             if let Some(connection) = self.connections.lock().await.get_mut(&connection_id) {
                 connection.state = ConnectionState::Ready;
             }
+            tracing::info!(connection_id, "client completed initialized handshake");
             return None;
         }
         if method == "initialize" {
@@ -168,12 +194,24 @@ impl ServerRuntime {
         let request_id = id.unwrap_or(serde_json::Value::Null);
         match serde_json::from_value::<InitializeParams>(params) {
             Ok(params) => {
+                let transport = params.transport.clone();
+                let opt_out_notification_count = params.opt_out_notification_methods.len();
                 if let Some(connection) = self.connections.lock().await.get_mut(&connection_id) {
                     connection.state = ConnectionState::Initializing;
                     connection.transport = params.transport;
                     connection.opt_out_notification_methods =
                         params.opt_out_notification_methods.into_iter().collect();
                 }
+                tracing::info!(
+                    connection_id,
+                    client_name = %params.client_name,
+                    client_version = %params.client_version,
+                    transport = ?transport,
+                    supports_streaming = params.supports_streaming,
+                    supports_binary_images = params.supports_binary_images,
+                    opt_out_notification_count,
+                    "accepted initialize request"
+                );
                 serde_json::to_value(SuccessResponse {
                     id: request_id,
                     result: self.metadata.clone(),
@@ -201,7 +239,7 @@ impl ServerRuntime {
                     request_id,
                     ProtocolErrorCode::InvalidParams,
                     format!("invalid session/start params: {error}"),
-                )
+                );
             }
         };
 
@@ -270,6 +308,15 @@ impl ServerRuntime {
         );
         self.subscribe_connection_to_session(connection_id, session_id, None)
             .await;
+        tracing::info!(
+            connection_id,
+            session_id = %session_id,
+            cwd = %summary.cwd.display(),
+            ephemeral = summary.ephemeral,
+            resolved_model = ?summary.resolved_model,
+            has_title = summary.title.is_some(),
+            "started session"
+        );
         self.broadcast_event(ServerEvent::SessionStarted(SessionEventPayload {
             session: summary.clone(),
         }))
@@ -333,7 +380,7 @@ impl ServerRuntime {
                     request_id,
                     ProtocolErrorCode::InvalidParams,
                     format!("invalid session/title/update params: {error}"),
-                )
+                );
             }
         };
         let new_title = params.title.trim();
@@ -404,7 +451,7 @@ impl ServerRuntime {
                     request_id,
                     ProtocolErrorCode::InvalidParams,
                     format!("invalid session/resume params: {error}"),
-                )
+                );
             }
         };
         let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
@@ -422,6 +469,13 @@ impl ServerRuntime {
         drop(session);
         self.subscribe_connection_to_session(connection_id, params.session_id, None)
             .await;
+        tracing::info!(
+            connection_id,
+            session_id = %params.session_id,
+            loaded_item_count,
+            has_latest_turn = latest_turn.is_some(),
+            "resumed session"
+        );
         serde_json::to_value(SuccessResponse {
             id: request_id,
             result: SessionResumeResult {
@@ -447,7 +501,7 @@ impl ServerRuntime {
                     request_id,
                     ProtocolErrorCode::InvalidParams,
                     format!("invalid session/fork params: {error}"),
-                )
+                );
             }
         };
         let Some(source_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
@@ -539,6 +593,15 @@ impl ServerRuntime {
         }
         self.subscribe_connection_to_session(connection_id, forked_id, None)
             .await;
+        tracing::info!(
+            connection_id,
+            source_session_id = %params.session_id,
+            forked_session_id = %forked_id,
+            cwd = %summary.cwd.display(),
+            ephemeral = summary.ephemeral,
+            resolved_model = ?summary.resolved_model,
+            "forked session"
+        );
         self.broadcast_event(ServerEvent::SessionStarted(SessionEventPayload {
             session: summary.clone(),
         }))
@@ -565,7 +628,7 @@ impl ServerRuntime {
                     request_id,
                     ProtocolErrorCode::InvalidParams,
                     format!("invalid turn/start params: {error}"),
-                )
+                );
             }
         };
         if params.input.is_empty() {
@@ -678,6 +741,14 @@ impl ServerRuntime {
             }
         }
 
+        tracing::info!(
+            session_id = %params.session_id,
+            turn_id = %turn.turn_id,
+            sequence = turn.sequence,
+            model_slug = %turn.model_slug,
+            input_chars = input_text.len(),
+            "started turn"
+        );
         self.broadcast_event(ServerEvent::SessionStatusChanged(
             SessionStatusChangedPayload {
                 session_id: params.session_id,
@@ -714,7 +785,7 @@ impl ServerRuntime {
                     request_id,
                     ProtocolErrorCode::InvalidParams,
                     format!("invalid turn/interrupt params: {error}"),
-                )
+                );
             }
         };
         let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
@@ -774,6 +845,12 @@ impl ServerRuntime {
             }
         }
 
+        tracing::info!(
+            session_id = %params.session_id,
+            turn_id = %interrupted_turn.turn_id,
+            status = ?interrupted_turn.status,
+            "interrupted turn"
+        );
         self.broadcast_event(ServerEvent::TurnInterrupted(TurnEventPayload {
             session_id: params.session_id,
             turn: interrupted_turn.clone(),
@@ -815,7 +892,7 @@ impl ServerRuntime {
                     request_id,
                     ProtocolErrorCode::InvalidParams,
                     format!("invalid turn/steer params: {error}"),
-                )
+                );
             }
         };
         if params.input.is_empty() {
@@ -866,6 +943,13 @@ impl ServerRuntime {
             }),
         )
         .await;
+        tracing::info!(
+            connection_id,
+            session_id = %params.session_id,
+            turn_id = %turn_id,
+            input_items = 1,
+            "accepted turn steer request"
+        );
         serde_json::to_value(SuccessResponse {
             id: request_id,
             result: TurnSteerResult { turn_id },
@@ -886,7 +970,7 @@ impl ServerRuntime {
                     request_id,
                     ProtocolErrorCode::InvalidParams,
                     format!("invalid events/subscribe params: {error}"),
-                )
+                );
             }
         };
         if let Some(connection) = self.connections.lock().await.get_mut(&connection_id) {
@@ -928,11 +1012,13 @@ impl ServerRuntime {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<QueryEvent>();
         let runtime = Arc::clone(&self);
         let turn_for_events = turn.clone();
+        let event_session_arc = Arc::clone(&session_arc);
         let event_task = tokio::spawn(async move {
             let mut assistant_item_id = None;
             let mut assistant_item_seq = None;
             let mut assistant_text = String::new();
             let mut latest_usage: Option<TurnUsage> = None;
+            let mut usage_base: Option<(usize, usize)> = None;
             while let Some(event) = event_rx.recv().await {
                 match event {
                     QueryEvent::TextDelta(text) => {
@@ -1035,20 +1121,59 @@ impl ServerRuntime {
                             )
                             .await;
                     }
-                    QueryEvent::Usage {
+                    QueryEvent::UsageDelta {
+                        input_tokens,
+                        output_tokens,
+                        cache_creation_input_tokens,
+                        cache_read_input_tokens,
+                    }
+                    | QueryEvent::Usage {
                         input_tokens,
                         output_tokens,
                         cache_creation_input_tokens,
                         cache_read_input_tokens,
                     } => {
-                        latest_usage = Some(TurnUsage {
+                        let usage = TurnUsage {
                             input_tokens: input_tokens as u32,
                             output_tokens: output_tokens as u32,
                             cache_creation_input_tokens: cache_creation_input_tokens
                                 .map(|value| value as u32),
                             cache_read_input_tokens: cache_read_input_tokens
                                 .map(|value| value as u32),
-                        });
+                        };
+                        latest_usage = Some(usage.clone());
+
+                        let base = if let Some(base) = usage_base {
+                            base
+                        } else {
+                            let base = {
+                                let session = event_session_arc.lock().await;
+                                (
+                                    session.summary.total_input_tokens,
+                                    session.summary.total_output_tokens,
+                                )
+                            };
+                            usage_base = Some(base);
+                            base
+                        };
+                        {
+                            let mut session = event_session_arc.lock().await;
+                            session.summary.total_input_tokens =
+                                base.0 + usage.input_tokens as usize;
+                            session.summary.total_output_tokens =
+                                base.1 + usage.output_tokens as usize;
+                        }
+                        let _ = runtime
+                            .broadcast_event(ServerEvent::TurnUsageUpdated(
+                                TurnUsageUpdatedPayload {
+                                    session_id,
+                                    turn_id: turn_for_events.turn_id,
+                                    usage,
+                                    total_input_tokens: base.0 + input_tokens as usize,
+                                    total_output_tokens: base.1 + output_tokens as usize,
+                                },
+                            ))
+                            .await;
                     }
                     QueryEvent::TurnComplete { .. } => {}
                 }
@@ -1166,6 +1291,13 @@ impl ServerRuntime {
         }
 
         if let Err(error) = result {
+            tracing::warn!(
+                session_id = %session_id,
+                turn_id = %final_turn.turn_id,
+                status = ?final_turn.status,
+                error = %error,
+                "turn execution failed"
+            );
             self.emit_text_item(
                 session_id,
                 final_turn.turn_id,
@@ -1182,6 +1314,15 @@ impl ServerRuntime {
                 turn: final_turn.clone(),
             }))
             .await;
+        } else {
+            tracing::info!(
+                session_id = %session_id,
+                turn_id = %final_turn.turn_id,
+                status = ?final_turn.status,
+                total_input_tokens = final_turn.usage.as_ref().map(|usage| usage.input_tokens),
+                total_output_tokens = final_turn.usage.as_ref().map(|usage| usage.output_tokens),
+                "turn execution completed"
+            );
         }
         self.broadcast_event(ServerEvent::TurnCompleted(TurnEventPayload {
             session_id,
@@ -1578,11 +1719,18 @@ impl ServerRuntime {
         code: ProtocolErrorCode,
         message: impl Into<String>,
     ) -> serde_json::Value {
+        let message = message.into();
+        tracing::warn!(
+            request_id = %request_id,
+            code = ?code,
+            error_message = %message,
+            "returning protocol error"
+        );
         serde_json::to_value(ErrorResponse {
             id: request_id,
             error: ProtocolError {
                 code,
-                message: message.into(),
+                message,
                 data: serde_json::json!({}),
             },
         })
@@ -1647,6 +1795,7 @@ impl ServerEvent {
             | ServerEvent::TurnFailed(payload)
             | ServerEvent::TurnPlanUpdated(payload)
             | ServerEvent::TurnDiffUpdated(payload) => Some(payload.session_id),
+            ServerEvent::TurnUsageUpdated(payload) => Some(payload.session_id),
             ServerEvent::ItemStarted(payload) | ServerEvent::ItemCompleted(payload) => {
                 Some(payload.context.session_id)
             }
@@ -1669,6 +1818,7 @@ impl ServerEvent {
             ServerEvent::TurnFailed(_) => "turn/failed",
             ServerEvent::TurnPlanUpdated(_) => "turn/plan/updated",
             ServerEvent::TurnDiffUpdated(_) => "turn/diff/updated",
+            ServerEvent::TurnUsageUpdated(_) => "turn/usage/updated",
             ServerEvent::ItemStarted(_) => "item/started",
             ServerEvent::ItemCompleted(_) => "item/completed",
             ServerEvent::ItemDelta { delta_kind, .. } => match delta_kind {
@@ -1689,6 +1839,7 @@ impl ServerEvent {
                 payload.context.seq = seq;
             }
             ServerEvent::ItemDelta { payload, .. } => payload.context.seq = seq,
+            ServerEvent::TurnUsageUpdated(_) => {}
             _ => {}
         }
         self

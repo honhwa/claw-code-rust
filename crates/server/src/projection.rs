@@ -52,7 +52,7 @@ impl DefaultProjection {
                         history.push(SessionHistoryItem {
                             kind: SessionHistoryItemKind::ToolCall,
                             title: summarize_tool_call(name, input),
-                            body: render_json_preview(input),
+                            body: String::new(),
                         });
                     }
                     ContentBlock::ToolResult {
@@ -106,7 +106,7 @@ pub(crate) fn history_item_from_turn_item(item: &TurnItem) -> Option<SessionHist
         }) => Some(SessionHistoryItem {
             kind: SessionHistoryItemKind::ToolCall,
             title: summarize_tool_call(tool_name, input),
-            body: render_json_preview(input),
+            body: String::new(),
         }),
         TurnItem::ToolResult(ToolResultItem {
             output, is_error, ..
@@ -178,55 +178,5 @@ fn summarize_tool_call(tool_name: &str, input: &serde_json::Value) -> String {
             .map(|command| format!("Ran {command}"))
             .unwrap_or_else(|| "Ran shell command".to_string()),
         other => format!("Ran {other}"),
-    }
-}
-
-fn render_json_preview(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::String(text) => truncate_tool_output(text),
-        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-            let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-            truncate_tool_output(&pretty)
-        }
-        _ => truncate_tool_output(&value.to_string()),
-    }
-}
-
-fn truncate_tool_output(content: &str) -> String {
-    const MAX_LINES: usize = 8;
-    const MAX_CHARS: usize = 1200;
-
-    let mut lines = Vec::new();
-    let mut chars = 0usize;
-    for line in content.lines() {
-        if lines.len() >= MAX_LINES || chars >= MAX_CHARS {
-            break;
-        }
-        let remaining = MAX_CHARS.saturating_sub(chars);
-        if line.chars().count() > remaining {
-            lines.push(line.chars().take(remaining).collect::<String>());
-            break;
-        }
-        chars += line.chars().count();
-        lines.push(line.to_string());
-    }
-
-    if lines.is_empty() && !content.is_empty() {
-        let preview = content.chars().take(MAX_CHARS).collect::<String>();
-        return if preview == content {
-            preview
-        } else {
-            format!("{preview}\n... ")
-        };
-    }
-
-    let preview = lines.join("\n");
-    if preview == content {
-        preview
-    } else if preview.is_empty() {
-        "... ".to_string()
-    } else {
-        format!("{preview}\n... ")
     }
 }

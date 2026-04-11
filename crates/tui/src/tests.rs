@@ -7,15 +7,15 @@ use clawcr_core::{
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use pretty_assertions::assert_eq;
-use ratatui::layout::Rect;
+use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
 use crate::app::{AuxPanelContent, TuiApp};
 use crate::{
+    SavedModelEntry,
     events::{SessionListEntry, TranscriptItem, TranscriptItemKind, WorkerEvent},
     input::InputBuffer,
     render,
     worker::QueryWorkerHandle,
-    SavedModelEntry,
 };
 
 fn test_app() -> TuiApp {
@@ -58,6 +58,7 @@ fn test_app() -> TuiApp {
         }]),
         saved_models: vec![SavedModelEntry {
             model: "test-model".to_string(),
+            provider: ProviderKind::Anthropic,
             base_url: None,
             api_key: None,
         }],
@@ -75,10 +76,24 @@ fn test_app() -> TuiApp {
         aux_panel: None,
         aux_panel_selection: 0,
         thinking_selection: None,
+        pending_tool_items: std::collections::HashMap::new(),
         last_ctrl_c_at: None,
         paste_burst: crate::paste_burst::PasteBurst::default(),
         should_quit: false,
+        inline_mode: false,
+        terminal_width: 80,
+        inline_assistant_stream_open: false,
+        inline_assistant_pending_line: String::new(),
+        inline_assistant_header_emitted: false,
+        pending_inline_history: Vec::new(),
     }
+}
+
+fn render_inline_lines(backend: &TestBackend) -> Vec<String> {
+    format!("{backend}")
+        .lines()
+        .map(|line| line.trim_matches('"').to_string())
+        .collect()
 }
 
 #[tokio::test]
@@ -93,9 +108,99 @@ async fn assistant_text_deltas_append_to_same_item() {
 }
 
 #[tokio::test]
+async fn inline_assistant_stream_flushes_to_pending_history_on_tool_call_boundary() {
+    let mut app = test_app();
+    app.inline_mode = true;
+
+    app.handle_worker_event(WorkerEvent::TextDelta("before".to_string()));
+    assert!(app.pending_inline_history.is_empty());
+
+    app.handle_worker_event(WorkerEvent::ToolCall {
+        tool_use_id: "tool-1".to_string(),
+        summary: "bash: date".to_string(),
+        detail: None,
+    });
+
+    assert!(
+        app.pending_inline_history
+            .iter()
+            .any(|block| block.contains("--- assistant"))
+    );
+    assert!(
+        app.pending_inline_history
+            .iter()
+            .any(|block| block.contains("assistant> before"))
+    );
+}
+
+#[tokio::test]
+async fn inline_assistant_stream_flushes_completed_lines_before_turn_end() {
+    let mut app = test_app();
+    app.inline_mode = true;
+
+    app.handle_worker_event(WorkerEvent::TextDelta("line 1\nline 2".to_string()));
+
+    assert!(
+        app.pending_inline_history
+            .iter()
+            .any(|block| block.contains("assistant> line 1"))
+    );
+    assert_eq!(app.inline_assistant_pending_line, "line 2");
+}
+
+#[tokio::test]
+async fn inline_assistant_stream_flushes_wrapped_visual_line_without_newline() {
+    let mut app = test_app();
+    app.inline_mode = true;
+    app.terminal_width = 24;
+
+    app.handle_worker_event(WorkerEvent::TextDelta(
+        "this is a long assistant line without newline yet".to_string(),
+    ));
+
+    assert!(
+        app.pending_inline_history
+            .iter()
+            .any(|block| block.contains("--- assistant"))
+    );
+    assert!(
+        app.pending_inline_history
+            .iter()
+            .any(|block| block.contains("assistant> "))
+    );
+    assert!(!app.inline_assistant_pending_line.is_empty());
+}
+
+#[tokio::test]
+async fn inline_assistant_stream_flushes_to_pending_history_when_turn_finishes() {
+    let mut app = test_app();
+    app.inline_mode = true;
+
+    app.handle_worker_event(WorkerEvent::TextDelta("hello".to_string()));
+    app.handle_worker_event(WorkerEvent::TurnFinished {
+        stop_reason: "completed".to_string(),
+        turn_count: 1,
+        total_input_tokens: 5,
+        total_output_tokens: 7,
+    });
+
+    assert!(
+        app.pending_inline_history
+            .iter()
+            .any(|block| block.contains("--- assistant"))
+    );
+    assert!(
+        app.pending_inline_history
+            .iter()
+            .any(|block| block.contains("assistant> hello"))
+    );
+}
+
+#[tokio::test]
 async fn tool_results_create_separate_items() {
     let mut app = test_app();
     app.handle_worker_event(WorkerEvent::ToolResult {
+        tool_use_id: "tool-1".to_string(),
         preview: "done".to_string(),
         is_error: false,
         truncated: false,
@@ -107,7 +212,7 @@ async fn tool_results_create_separate_items() {
 }
 
 #[tokio::test]
-async fn tool_result_fold_progresses_to_three_line_compact_state() {
+async fn tool_result_fold_progresses_to_hidden_compact_state() {
     let mut item = TranscriptItem::new(
         TranscriptItemKind::ToolResult,
         "Tool output",
@@ -126,8 +231,12 @@ async fn tool_result_fold_progresses_to_three_line_compact_state() {
     let second = item.fold_next_at.expect("second fold deadline");
     assert!(item.advance_fold(second));
     assert_eq!(item.fold_stage, 2);
+
+    let third = item.fold_next_at.expect("third fold deadline");
+    assert!(item.advance_fold(third));
+    assert_eq!(item.fold_stage, 3);
     assert!(item.fold_next_at.is_none());
-    assert!(!item.advance_fold(second));
+    assert!(!item.advance_fold(third));
 }
 
 #[tokio::test]
@@ -148,13 +257,48 @@ async fn slash_status_shows_bottom_panel() {
 }
 
 #[tokio::test]
+async fn inline_slash_command_emits_shell_echo_to_history_queue() {
+    let mut app = test_app();
+    app.inline_mode = true;
+
+    app.handle_slash_command("/status".to_string())
+        .expect("status command should succeed");
+
+    assert!(
+        app.pending_inline_history
+            .iter()
+            .any(|block| block.contains("› /status"))
+    );
+}
+
+#[tokio::test]
 async fn slash_sessions_requests_listing() {
     let mut app = test_app();
 
     app.handle_slash_command("/sessions".to_string())
         .expect("sessions command should succeed");
 
-    assert_eq!(app.status_message, "Loading sessions");
+    assert_eq!(app.status_message, "Listing sessions");
+    assert_eq!(
+        app.aux_panel.as_ref().map(|panel| panel.title.as_str()),
+        Some("Sessions")
+    );
+}
+
+#[tokio::test]
+async fn slash_sessions_in_inline_mode_opens_aux_panel() {
+    let mut app = test_app();
+    app.inline_mode = true;
+
+    app.handle_slash_command("/sessions".to_string())
+        .expect("sessions command should succeed");
+
+    assert_eq!(
+        app.aux_panel.as_ref().map(|panel| panel.title.as_str()),
+        Some("Sessions")
+    );
+    assert_eq!(app.status_message, "Listing sessions");
+    assert!(app.transcript.is_empty());
 }
 
 #[tokio::test]
@@ -189,6 +333,22 @@ async fn slash_model_shows_bottom_panel() {
 }
 
 #[tokio::test]
+async fn slash_model_in_inline_mode_shows_bottom_panel() {
+    let mut app = test_app();
+    app.inline_mode = true;
+
+    app.handle_slash_command("/model".to_string())
+        .expect("model command should succeed");
+
+    assert_eq!(
+        app.aux_panel.as_ref().map(|panel| panel.title.as_str()),
+        Some("Models")
+    );
+    assert_eq!(app.status_message, "Model switcher shown");
+    assert!(app.transcript.is_empty());
+}
+
+#[tokio::test]
 async fn slash_thinking_shows_bottom_panel() {
     let mut app = test_app();
 
@@ -203,6 +363,24 @@ async fn slash_thinking_shows_bottom_panel() {
     assert!(app.aux_panel.as_ref().is_some_and(
         |panel| matches!(&panel.content, AuxPanelContent::ThinkingList(entries) if !entries.is_empty())
     ));
+}
+
+#[tokio::test]
+async fn slash_thinking_in_inline_mode_shows_bottom_panel() {
+    let mut app = test_app();
+    app.inline_mode = true;
+
+    app.handle_slash_command("/thinking".to_string())
+        .expect("thinking command should succeed");
+
+    assert_eq!(
+        app.aux_panel.as_ref().map(|panel| panel.title.as_str()),
+        Some("Thinking")
+    );
+    assert!(app.aux_panel.as_ref().is_some_and(
+        |panel| matches!(&panel.content, AuxPanelContent::ThinkingList(entries) if !entries.is_empty())
+    ));
+    assert!(app.transcript.is_empty());
 }
 
 #[tokio::test]
@@ -227,11 +405,14 @@ async fn slash_rename_requires_title() {
 #[tokio::test]
 async fn slash_exit_requests_shutdown() {
     let mut app = test_app();
+    app.input.replace("/exit");
 
     app.handle_slash_command("/exit".to_string())
         .expect("exit command should succeed");
 
     assert!(app.should_quit);
+    assert!(app.aux_panel.is_none());
+    assert_eq!(app.input.text(), "");
 }
 
 #[tokio::test]
@@ -276,10 +457,11 @@ async fn slash_suggestions_include_onboard() {
     let mut app = test_app();
     app.input.replace("/o");
 
-    assert!(app
-        .slash_suggestions()
-        .iter()
-        .any(|suggestion| suggestion.name == "/onboard"));
+    assert!(
+        app.slash_suggestions()
+            .iter()
+            .any(|suggestion| suggestion.name == "/onboard")
+    );
 }
 
 #[tokio::test]
@@ -312,6 +494,105 @@ async fn model_panel_selection_updates_model() {
     );
 
     assert_eq!(app.model, "test-model");
+}
+
+#[tokio::test]
+async fn slash_model_with_argument_in_inline_mode_updates_status_without_transcript_note() {
+    let mut app = test_app();
+    app.inline_mode = true;
+
+    app.handle_slash_command("/model test-model".to_string())
+        .expect("model command should succeed");
+
+    assert_eq!(app.model, "test-model");
+    assert_eq!(app.status_message, "Model set to test-model");
+    assert!(app.transcript.is_empty());
+}
+
+#[tokio::test]
+async fn inline_slash_popup_uses_reserved_bottom_area_and_restores_transcript() {
+    let mut app = test_app();
+    app.inline_mode = true;
+    app.transcript.push(TranscriptItem::new(
+        TranscriptItemKind::Assistant,
+        "assistant",
+        ["line 1", "line 2", "line 3", "line 4", "line 5"].join("\n"),
+    ));
+    app.input.insert_str("/mo");
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
+    terminal
+        .draw(|frame| render::draw(frame, &app, true))
+        .expect("draw popup");
+    let popup_lines = render_inline_lines(terminal.backend());
+
+    app.input.clear();
+    terminal
+        .draw(|frame| render::draw(frame, &app, true))
+        .expect("draw restored transcript");
+    let restored_lines = render_inline_lines(terminal.backend());
+
+    assert!(!popup_lines.iter().any(|line| line.contains("line 1")));
+    assert!(!popup_lines.iter().any(|line| line.contains("line 2")));
+    assert!(!popup_lines.iter().any(|line| line.contains("line 3")));
+    assert!(!popup_lines.iter().any(|line| line.contains("line 4")));
+    assert!(!popup_lines.iter().any(|line| line.contains("line 5")));
+    assert!(popup_lines.iter().any(|line| line.contains("› /mo")));
+    assert!(popup_lines.iter().any(|line| line.contains("/model")));
+    assert!(
+        popup_lines
+            .iter()
+            .any(|line| line.contains("Show or change"))
+    );
+    assert!(
+        restored_lines
+            .iter()
+            .any(|line| line.contains("Type a message or / for commands"))
+    );
+    assert!(!restored_lines.iter().any(|line| line.contains("/model")));
+    assert!(!restored_lines.iter().any(|line| line.contains("line 1")));
+}
+
+#[tokio::test]
+async fn inline_aux_panel_uses_reserved_bottom_area_and_restores_transcript() {
+    let mut app = test_app();
+    app.inline_mode = true;
+    app.transcript.push(TranscriptItem::new(
+        TranscriptItemKind::Assistant,
+        "assistant",
+        ["alpha", "beta", "gamma", "delta", "epsilon"].join("\n"),
+    ));
+    app.show_aux_panel("Status", "one\ntwo\nthree");
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
+    terminal
+        .draw(|frame| render::draw(frame, &app, true))
+        .expect("draw aux panel");
+    let open_lines = render_inline_lines(terminal.backend());
+
+    app.aux_panel = None;
+    terminal
+        .draw(|frame| render::draw(frame, &app, true))
+        .expect("draw restored transcript");
+    let closed_lines = render_inline_lines(terminal.backend());
+
+    assert!(open_lines.iter().any(|line| line.contains("Status")));
+    assert!(open_lines.iter().any(|line| line.contains("one")));
+    assert!(open_lines.iter().any(|line| line.contains("two")));
+    assert!(open_lines.iter().any(|line| line.contains("three")));
+    assert!(
+        !open_lines
+            .iter()
+            .any(|line| line.contains("┌") || line.contains("│"))
+    );
+    assert!(!open_lines.iter().any(|line| line.contains("alpha")));
+    assert!(
+        closed_lines
+            .iter()
+            .any(|line| line.contains("Type a message or / for commands"))
+    );
+    assert!(!closed_lines.iter().any(|line| line.contains("alpha")));
+    assert!(!closed_lines.iter().any(|line| line.contains("epsilon")));
 }
 
 #[tokio::test]
@@ -393,6 +674,7 @@ async fn onboarding_model_picker_enter_on_builtin_row_prompts_for_connection() {
     app.show_model_onboarding = true;
     app.saved_models = vec![SavedModelEntry {
         model: "existing-model".to_string(),
+        provider: ProviderKind::Anthropic,
         base_url: Some("https://example.invalid/v1".to_string()),
         api_key: Some("secret".to_string()),
     }];
@@ -559,7 +841,8 @@ async fn tool_call_breaks_assistant_stream_into_new_segment() {
     let mut app = test_app();
     app.handle_worker_event(WorkerEvent::TextDelta("before".to_string()));
     app.handle_worker_event(WorkerEvent::ToolCall {
-        summary: "Ran date".to_string(),
+        tool_use_id: "tool-1".to_string(),
+        summary: "bash: date".to_string(),
         detail: Some("{\n  \"command\": \"date\"\n}".to_string()),
     });
     app.handle_worker_event(WorkerEvent::TextDelta("after".to_string()));
@@ -568,11 +851,7 @@ async fn tool_call_breaks_assistant_stream_into_new_segment() {
         app.transcript,
         vec![
             TranscriptItem::new(TranscriptItemKind::Assistant, "Assistant", "before"),
-            TranscriptItem::new(
-                TranscriptItemKind::ToolCall,
-                "Ran date",
-                "{\n  \"command\": \"date\"\n}"
-            ),
+            TranscriptItem::new(TranscriptItemKind::ToolCall, "bash: date", ""),
             TranscriptItem::new(TranscriptItemKind::Assistant, "Assistant", "after"),
         ]
     );
@@ -585,6 +864,7 @@ async fn tool_result_readds_thinking_while_turn_is_still_busy() {
     app.pending_status_index = Some(app.push_item(TranscriptItemKind::System, "Thinking", ""));
 
     app.handle_worker_event(WorkerEvent::ToolResult {
+        tool_use_id: "tool-1".to_string(),
         preview: "2026-04-06 23:58:56".to_string(),
         is_error: false,
         truncated: false,
@@ -628,7 +908,7 @@ async fn transcript_area_tracks_content_height_when_short() {
 }
 
 #[tokio::test]
-async fn session_switched_event_updates_model_and_transcript() {
+async fn session_switched_event_updates_model_and_restores_transcript() {
     let mut app = test_app();
 
     app.handle_worker_event(WorkerEvent::SessionSwitched {
@@ -651,6 +931,18 @@ async fn session_switched_event_updates_model_and_transcript() {
     assert_eq!(app.transcript.len(), 1);
     assert_eq!(app.transcript[0].kind, TranscriptItemKind::User);
     assert_eq!(app.transcript[0].body, "restored prompt");
+}
+
+#[tokio::test]
+async fn turn_started_event_updates_displayed_model() {
+    let mut app = test_app();
+
+    app.handle_worker_event(WorkerEvent::TurnStarted {
+        model: "server-model".to_string(),
+    });
+
+    assert_eq!(app.model, "server-model");
+    assert!(app.busy);
 }
 
 #[tokio::test]
@@ -718,6 +1010,34 @@ async fn sessions_listed_event_updates_bottom_panel_not_transcript() {
 }
 
 #[tokio::test]
+async fn sessions_listed_event_updates_bottom_panel_in_inline_mode() {
+    let mut app = test_app();
+    app.inline_mode = true;
+
+    app.handle_worker_event(WorkerEvent::SessionsListed {
+        sessions: vec![SessionListEntry {
+            session_id: SessionId::new(),
+            title: "Saved conversation".to_string(),
+            updated_at: "2026-04-06 08:00:00 UTC".to_string(),
+            is_active: true,
+        }],
+    });
+
+    assert!(app.transcript.is_empty());
+    assert_eq!(
+        app.aux_panel.as_ref().map(|panel| panel.title.as_str()),
+        Some("Sessions")
+    );
+    assert!(app.aux_panel.as_ref().is_some_and(|panel| {
+        matches!(
+            &panel.content,
+            AuxPanelContent::SessionList(entries)
+                if entries.iter().any(|entry| entry.title == "Saved conversation")
+        )
+    }));
+}
+
+#[tokio::test]
 async fn session_panel_selection_moves_with_up_and_down() {
     let mut app = test_app();
     app.show_session_panel(vec![
@@ -758,6 +1078,34 @@ async fn slash_selection_wraps_around() {
 
     app.move_slash_selection(1);
     assert_eq!(app.slash_selection, 0);
+}
+
+#[tokio::test]
+async fn escape_dismisses_slash_popup_and_clears_input() {
+    let mut app = test_app();
+    app.input.replace("/mo");
+
+    app.handle_key(
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        Rect::new(0, 0, 80, 24),
+    );
+
+    assert_eq!(app.input.text(), "");
+    assert!(!app.has_slash_suggestions());
+}
+
+#[tokio::test]
+async fn typing_with_aux_panel_open_dismisses_panel_and_starts_input() {
+    let mut app = test_app();
+    app.show_aux_panel("Status", "details");
+
+    app.handle_key(
+        KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        Rect::new(0, 0, 80, 24),
+    );
+
+    assert!(app.aux_panel.is_none());
+    assert_eq!(app.input.text(), "h");
 }
 
 #[tokio::test]

@@ -1,11 +1,9 @@
 use super::*;
 
 impl TuiApp {
-    /// Runs the full interactive UI until the user exits.
+    /// Runs the interactive UI until the user exits.
     pub(crate) async fn run(config: InteractiveTuiConfig) -> Result<AppExit> {
-        // Spawn the worker first so startup prompts can be submitted immediately
-        // after the terminal session is ready.
-        let startup_prompt = config.startup_prompt.clone();
+        // Spawn the worker first.
         let worker = QueryWorkerHandle::spawn(QueryWorkerConfig {
             model: config.model.clone(),
             cwd: config.cwd.clone(),
@@ -31,6 +29,7 @@ impl TuiApp {
             aux_panel: None,
             pending_status_index: None,
             pending_assistant_index: None,
+            pending_tool_items: std::collections::HashMap::new(),
             thinking_selection: None,
             worker,
             model_catalog: config.model_catalog,
@@ -50,6 +49,12 @@ impl TuiApp {
             last_ctrl_c_at: None,
             paste_burst: PasteBurst::default(),
             should_quit: false,
+            inline_mode: false,
+            terminal_width: 80,
+            inline_assistant_stream_open: false,
+            inline_assistant_pending_line: String::new(),
+            inline_assistant_header_emitted: false,
+            pending_inline_history: Vec::new(),
         };
 
         if app.show_model_onboarding {
@@ -58,11 +63,17 @@ impl TuiApp {
             app.status_message.clear();
         }
 
-        if let Some(prompt) = startup_prompt {
-            app.submit_prompt(prompt)?;
+        let mut terminal = ManagedTerminal::new(config.terminal_mode)?;
+        app.inline_mode = !terminal.uses_alternate_screen();
+        app.terminal_width = terminal.area().width;
+        if app.inline_mode {
+            terminal.insert_history_block(&crate::transcript::format_startup_banner(
+                &app.model,
+                &app.cwd,
+                env!("CARGO_PKG_VERSION"),
+                app.terminal_width,
+            ))?;
         }
-
-        let mut terminal = ManagedTerminal::new()?;
         let mut event_stream = EventStream::new();
         let mut tick = tokio::time::interval(Duration::from_millis(80));
         let mut needs_redraw = true;
@@ -71,9 +82,16 @@ impl TuiApp {
             // Only repaint after a state change; this keeps the UI responsive and
             // avoids unnecessary full-screen redraws.
             if needs_redraw {
+                if app.inline_mode {
+                    terminal.set_inline_viewport_height(render::inline_viewport_height(
+                        &app,
+                        terminal.area().width,
+                    ))?;
+                    terminal.flush_pending_inline_history(&mut app.pending_inline_history)?;
+                }
                 terminal
                     .terminal_mut()
-                    .draw(|frame| render::draw(frame, &app))?;
+                    .draw(|frame| render::draw(frame, &app, app.inline_mode))?;
                 needs_redraw = false;
             }
 
@@ -87,6 +105,11 @@ impl TuiApp {
                         Some(Ok(event)) => {
                             // Any terminal input can affect composer state, scrolling,
                             // or selection state, so accepted input invalidates the frame.
+                            if let Event::Resize(width, _) = event {
+                                app.terminal_width = width;
+                            } else {
+                                app.terminal_width = terminal.area().width;
+                            }
                             app.handle_terminal_event(event, terminal.area())?;
                             needs_redraw = true;
                         }
@@ -178,6 +201,9 @@ impl TuiApp {
             }
             Event::Resize(_, _) => {}
             Event::Mouse(mouse) => {
+                if self.inline_mode {
+                    return Ok(());
+                }
                 self.flush_pending_paste_burst(true);
                 use crossterm::event::MouseEventKind;
                 match mouse.kind {
@@ -215,6 +241,14 @@ impl TuiApp {
                 self.pending_status_index = None;
                 self.pending_assistant_index = None;
                 self.status_message = "Transcript cleared".to_string();
+                if self.inline_mode {
+                    self.close_inline_assistant_stream();
+                    self.pending_inline_history
+                        .push("\n^L clear screen\n".to_string());
+                    print!("\x1b[2J\x1b[H");
+                    let mut stdout = std::io::stdout();
+                    let _ = std::io::Write::flush(&mut stdout);
+                }
             }
             KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.should_quit = true;
@@ -300,7 +334,7 @@ impl TuiApp {
                     self.move_aux_panel_selection(-1);
                 } else if self.has_slash_suggestions() {
                     self.move_slash_selection(-1);
-                } else {
+                } else if !self.inline_mode {
                     if self.follow_output {
                         self.scroll =
                             render::get_max_scroll(self, self.transcript_area(terminal_area));
@@ -314,7 +348,7 @@ impl TuiApp {
                     self.move_aux_panel_selection(1);
                 } else if self.has_slash_suggestions() {
                     self.move_slash_selection(1);
-                } else {
+                } else if !self.inline_mode {
                     if self.follow_output {
                         self.scroll =
                             render::get_max_scroll(self, self.transcript_area(terminal_area));
@@ -324,26 +358,34 @@ impl TuiApp {
                 }
             }
             KeyCode::PageUp => {
-                if self.follow_output {
-                    self.scroll = render::get_max_scroll(self, self.transcript_area(terminal_area));
-                    self.follow_output = false;
+                if !self.inline_mode {
+                    if self.follow_output {
+                        self.scroll =
+                            render::get_max_scroll(self, self.transcript_area(terminal_area));
+                        self.follow_output = false;
+                    }
+                    self.scroll = self.scroll.saturating_sub(10);
                 }
-                self.scroll = self.scroll.saturating_sub(10);
             }
             KeyCode::PageDown => {
-                if self.follow_output {
-                    self.scroll = render::get_max_scroll(self, self.transcript_area(terminal_area));
-                    self.follow_output = false;
+                if !self.inline_mode {
+                    if self.follow_output {
+                        self.scroll =
+                            render::get_max_scroll(self, self.transcript_area(terminal_area));
+                        self.follow_output = false;
+                    }
+                    self.scroll = self.scroll.saturating_add(10);
                 }
-                self.scroll = self.scroll.saturating_add(10);
             }
             KeyCode::Esc => {
                 self.flush_pending_paste_burst(true);
-                if !self.handle_escape() {
+                if self.has_slash_suggestions() {
+                    self.dismiss_slash_popup();
+                    self.dismiss_aux_panel();
+                } else if !self.handle_escape() {
                     self.input.clear();
                     self.reset_slash_selection();
-                    self.aux_panel = None;
-                    self.aux_panel_selection = 0;
+                    self.dismiss_aux_panel();
                 }
             }
             KeyCode::Char(ch)
@@ -355,18 +397,13 @@ impl TuiApp {
                     self.begin_custom_model_onboarding();
                 }
             }
-            KeyCode::Char(_ch)
-                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && self.has_selectable_aux_panel()
-                    && self.input.is_blank() => {}
             KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.paste_burst.push_char(ch, Instant::now()) {
                     return;
                 }
                 self.input.insert_char(ch);
                 self.reset_slash_selection();
-                self.aux_panel = None;
-                self.aux_panel_selection = 0;
+                self.dismiss_aux_panel();
             }
             _ => {}
         }
@@ -516,6 +553,7 @@ impl TuiApp {
             return Ok(());
         }
 
+        self.close_inline_assistant_stream();
         self.push_item(TranscriptItemKind::User, "You", prompt.clone());
         self.pending_status_index =
             Some(self.push_item(TranscriptItemKind::System, "Thinking", ""));
@@ -525,7 +563,6 @@ impl TuiApp {
         self.aux_panel = None;
         self.aux_panel_selection = 0;
         self.pending_assistant_index = None;
-        self.status_message = "Waiting for model response".to_string();
         self.worker.submit_prompt(prompt)
     }
 }

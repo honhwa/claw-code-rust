@@ -4,6 +4,8 @@ use serde_json::json;
 use std::path::PathBuf;
 use tracing::debug;
 
+const DESCRIPTION: &str = include_str!("grep.txt");
+
 /// Search file contents with a regular expression.
 pub struct GrepTool;
 
@@ -14,8 +16,7 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &str {
-        "Search for a regex pattern in file contents. Returns matching lines with \
-         file path and line number. Optionally restrict to files matching a glob pattern."
+        DESCRIPTION
     }
 
     fn input_schema(&self) -> serde_json::Value {

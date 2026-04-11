@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use serde_json::json;
 use tracing::debug;
 
+const DESCRIPTION: &str = include_str!("glob.txt");
+
 /// Find files matching a glob pattern, sorted by modification time.
 pub struct GlobTool;
 
@@ -13,9 +15,7 @@ impl Tool for GlobTool {
     }
 
     fn description(&self) -> &str {
-        "Find files matching a glob pattern (e.g. \"**/*.rs\", \"src/**/*.ts\"). \
-         Returns matching paths sorted by modification time, newest first. \
-         Use this to discover files before reading them."
+        DESCRIPTION
     }
 
     fn input_schema(&self) -> serde_json::Value {

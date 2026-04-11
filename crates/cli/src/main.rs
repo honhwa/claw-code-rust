@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use clawcr_core::{
     AppConfig, AppConfigLoader, FileSystemAppConfigLoader, LoggingBootstrap, LoggingRuntime,
 };
-use clawcr_server::{run_server_process, ServerProcessArgs};
+use clawcr_server::{ServerProcessArgs, run_server_process};
 use clawcr_utils::find_clawcr_home;
 
 mod agent;
@@ -17,16 +17,11 @@ use agent::run_agent;
 #[command(name = "clawcr", version, about = "ClawCR CLI")]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
-}
+    command: Option<Command>,
 
-/// Subcommands exposed by the primary `clawcr` executable.
-#[derive(Debug, Subcommand)]
-enum Commands {
-    /// Start the transport-facing server runtime.
-    Server(ServerProcessArgs),
-    /// Open the interactive model onboarding flow.
-    Onboard,
+    /// Keep the UI in the main terminal buffer instead of switching to the alternate screen.
+    #[arg(long = "no-alt-screen", default_value_t = false)]
+    no_alt_screen: bool,
 }
 
 #[tokio::main]
@@ -35,10 +30,15 @@ async fn main() -> Result<()> {
     let _logging = install_logging(&cli)?;
 
     match cli.command {
-        Some(Commands::Server(args)) => run_server_process(args).await,
-        Some(Commands::Onboard) => run_agent(true).await,
-        None => run_agent(false).await,
+        Some(Command::Server(args)) => run_server_process(args).await,
+        None => run_agent(false, cli.no_alt_screen).await,
     }
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Start the transport-facing server runtime.
+    Server(ServerProcessArgs),
 }
 
 fn install_logging(cli: &Cli) -> Result<LoggingRuntime> {
@@ -46,7 +46,7 @@ fn install_logging(cli: &Cli) -> Result<LoggingRuntime> {
     let loader = FileSystemAppConfigLoader::new(home_dir.clone());
     let current_dir = std::env::current_dir()?;
     let workspace_root = match &cli.command {
-        Some(Commands::Server(args)) => args.workspace_root.as_deref(),
+        Some(Command::Server(args)) => args.working_root.as_deref(),
         _ => Some(current_dir.as_path()),
     };
     let app_config = loader.load(workspace_root).unwrap_or_else(|err| {
