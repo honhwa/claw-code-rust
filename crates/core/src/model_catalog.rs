@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 use crate::{
     InputModality, ModelCatalog, ModelConfig, ModelConfigError, ModelVisibility, ProviderKind,
-    ReasoningLevel, ThinkingCapability, TruncationPolicyConfig,
+    ReasoningEffort, ThinkingCapability, TruncationPolicyConfig,
 };
 
 const DEFAULT_BASE_INSTRUCTIONS: &str = include_str!("../default_base_instructions.txt");
@@ -90,10 +90,14 @@ struct RawBuiltinModelConfig {
     provider: ProviderKind,
     #[serde(default)]
     description: String,
-    #[serde(default, deserialize_with = "deserialize_reasoning_level")]
-    default_reasoning_level: ReasoningLevel,
-    #[serde(default)]
-    supported_reasoning_levels: Vec<ReasoningLevel>,
+    #[serde(
+        default,
+        alias = "default_reasoning_level",
+        deserialize_with = "deserialize_reasoning_effort"
+    )]
+    default_reasoning_effort: ReasoningEffort,
+    #[serde(default, alias = "supported_reasoning_levels")]
+    supported_reasoning_efforts: Vec<ReasoningEffort>,
     #[serde(default)]
     thinking_capability: Option<RawThinkingCapability>,
     base_instructions: String,
@@ -126,15 +130,15 @@ impl RawBuiltinModelConfig {
         } else {
             Some(self.description)
         };
-        model.default_reasoning_level = self.default_reasoning_level;
-        model.supported_reasoning_levels = if self.supported_reasoning_levels.is_empty() {
-            vec![model.default_reasoning_level.clone()]
+        model.default_reasoning_effort = self.default_reasoning_effort;
+        model.supported_reasoning_efforts = if self.supported_reasoning_efforts.is_empty() {
+            vec![model.default_reasoning_effort]
         } else {
-            self.supported_reasoning_levels
+            self.supported_reasoning_efforts
         };
         model.thinking_capability = self.thinking_capability.map(|capability| match capability {
             RawThinkingCapability::Levels => {
-                ThinkingCapability::Levels(model.supported_reasoning_levels.clone())
+                ThinkingCapability::Levels(model.supported_reasoning_efforts.clone())
             }
             RawThinkingCapability::Toggle => ThinkingCapability::Toggle,
             RawThinkingCapability::Disabled => ThinkingCapability::Disabled,
@@ -158,13 +162,13 @@ impl RawBuiltinModelConfig {
     }
 }
 
-fn deserialize_reasoning_level<'de, D>(deserializer: D) -> Result<ReasoningLevel, D::Error>
+fn deserialize_reasoning_effort<'de, D>(deserializer: D) -> Result<ReasoningEffort, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     match value {
-        serde_json::Value::String(text) if text.trim().is_empty() => Ok(ReasoningLevel::default()),
+        serde_json::Value::String(text) if text.trim().is_empty() => Ok(ReasoningEffort::default()),
         other => serde_json::from_value(other).map_err(serde::de::Error::custom),
     }
 }

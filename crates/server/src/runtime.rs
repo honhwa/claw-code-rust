@@ -678,7 +678,7 @@ impl ServerRuntime {
                         clawcr_core::ThinkingCapability::Disabled => None,
                         clawcr_core::ThinkingCapability::Toggle => Some(String::from("enabled")),
                         clawcr_core::ThinkingCapability::Levels(_) => {
-                            Some(model.default_reasoning_level.label().to_lowercase())
+                            Some(model.default_reasoning_effort.label().to_lowercase())
                         }
                     })
                     .unwrap_or_default();

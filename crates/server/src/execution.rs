@@ -56,10 +56,10 @@ impl ServerRuntimeDependencies {
             .map(|model| model.base_instructions.trim().to_string())
             .filter(|instructions| !instructions.is_empty())
             .unwrap_or_else(|| default_base_instructions().to_string());
-        let reasoning_level = self
+        let reasoning_effort = self
             .model_catalog
             .get(&model)
-            .map(|model| model.default_reasoning_level.clone())
+            .map(|model| model.default_reasoning_effort)
             .unwrap_or_default();
         let thinking_selection = self
             .model_catalog
@@ -68,7 +68,7 @@ impl ServerRuntimeDependencies {
                 ThinkingCapability::Disabled => None,
                 ThinkingCapability::Toggle => Some(String::from("enabled")),
                 ThinkingCapability::Levels(_) => {
-                    Some(model.default_reasoning_level.label().to_lowercase())
+                    Some(model.default_reasoning_effort.label().to_lowercase())
                 }
             })
             .unwrap_or_default();
@@ -76,7 +76,7 @@ impl ServerRuntimeDependencies {
             SessionConfig {
                 model,
                 base_instructions,
-                reasoning_level,
+                reasoning_effort,
                 thinking_selection,
                 ..Default::default()
             },

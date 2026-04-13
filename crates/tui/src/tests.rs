@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clawcr_core::{
-    BuiltinModelCatalog, ModelConfig, ModelVisibility, ProviderKind, ReasoningLevel, SessionId,
+    BuiltinModelCatalog, ModelConfig, ModelVisibility, ProviderKind, ReasoningEffort, SessionId,
     ThinkingCapability,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -42,8 +42,8 @@ fn test_app() -> TuiApp {
             display_name: "test-model".to_string(),
             provider: ProviderKind::Anthropic,
             description: None,
-            default_reasoning_level: ReasoningLevel::Medium,
-            supported_reasoning_levels: vec![ReasoningLevel::Low, ReasoningLevel::Medium],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::Medium],
             thinking_capability: Some(ThinkingCapability::Toggle),
             base_instructions: String::new(),
             context_window: 200_000,
