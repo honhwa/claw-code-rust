@@ -551,8 +551,9 @@ impl ChatWidget {
 
     pub(crate) fn handle_worker_event(&mut self, event: WorkerEvent) {
         match event {
-            WorkerEvent::TurnStarted { model } => {
-                self.update_session_model_slug(model);
+            WorkerEvent::TurnStarted { model, thinking } => {
+                self.update_session_request_model(model);
+                self.thinking_selection = thinking;
                 self.busy = true;
                 self.active_assistant_text.clear();
                 self.active_reasoning_text.clear();
@@ -679,7 +680,7 @@ impl ChatWidget {
             WorkerEvent::ProviderValidationSucceeded { reply_preview } => {
                 if let Some(OnboardingStep::Validating { model, .. }) = self.onboarding_step.take()
                 {
-                    self.update_session_model_slug(model);
+                    self.update_session_request_model(model);
                 }
                 self.add_to_history(history_cell::new_info_event(
                     format!("Validation reply: {reply_preview}"),
@@ -711,9 +712,14 @@ impl ChatWidget {
                 self.add_markdown_history("Skills", &body);
                 self.set_status_message("Skills loaded");
             }
-            WorkerEvent::NewSessionPrepared { cwd, model } => {
+            WorkerEvent::NewSessionPrepared {
+                cwd,
+                model,
+                thinking,
+            } => {
                 self.session.cwd = cwd;
-                self.update_session_model_slug(model);
+                self.update_session_request_model(model);
+                self.thinking_selection = thinking;
                 self.active_assistant_text.clear();
                 self.active_reasoning_text.clear();
                 self.history.clear();
@@ -732,6 +738,7 @@ impl ChatWidget {
                 cwd,
                 title,
                 model,
+                thinking,
                 total_input_tokens,
                 total_output_tokens,
                 history_items,
@@ -739,8 +746,9 @@ impl ChatWidget {
             } => {
                 self.session.cwd = cwd;
                 if let Some(model) = model {
-                    self.update_session_model_slug(model);
+                    self.update_session_request_model(model);
                 }
+                self.thinking_selection = thinking;
                 self.history.clear();
                 self.next_history_flush_index = 0;
                 self.active_assistant_text.clear();
@@ -1026,7 +1034,7 @@ impl ChatWidget {
         self.frame_requester.schedule_frame();
     }
 
-    fn update_session_model_slug(&mut self, slug: String) {
+    fn update_session_request_model(&mut self, slug: String) {
         if let Some(model) = self
             .available_models
             .iter()
@@ -1071,14 +1079,7 @@ impl ChatWidget {
             Some(&self.session.cwd),
             &mut lines,
         );
-        if title == "Assistant" {
-            self.add_to_history(history_cell::AgentMessageCell::new_with_prefix(
-                lines,
-                Self::dot_prefix(status),
-                "  ",
-                false,
-            ));
-        } else if title == "Reasoning" {
+        if title == "Assistant" || title == "Reasoning" {
             self.add_to_history(history_cell::AgentMessageCell::new_with_prefix(
                 lines,
                 Self::dot_prefix(status),
@@ -1410,7 +1411,7 @@ impl ChatWidget {
             return;
         }
 
-        self.update_session_model_slug(slug.clone());
+        self.update_session_request_model(slug.clone());
         self.thinking_selection = self
             .session
             .model

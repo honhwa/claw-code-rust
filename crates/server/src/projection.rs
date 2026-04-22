@@ -4,9 +4,9 @@ use devo_core::{
 };
 
 use crate::session::{
-    SessionHistoryItem, SessionHistoryItemKind, SessionRuntimeStatus, SessionSummary,
+    SessionHistoryItem, SessionHistoryItemKind, SessionMetadata, SessionRuntimeStatus,
 };
-use crate::turn::TurnSummary;
+use crate::turn::TurnMetadata;
 
 /// Projects a canonical core session record into the API-visible session summary.
 pub trait SessionProjector {
@@ -16,13 +16,13 @@ pub trait SessionProjector {
         session: &SessionRecord,
         ephemeral: bool,
         status: SessionRuntimeStatus,
-    ) -> SessionSummary;
+    ) -> SessionMetadata;
 }
 
 /// Projects a canonical core turn record into the API-visible turn summary.
 pub trait TurnProjector {
     /// Converts one core turn record into a transport-facing turn summary.
-    fn project_turn(&self, turn: &TurnRecord) -> TurnSummary;
+    fn project_turn(&self, turn: &TurnRecord) -> TurnMetadata;
 }
 
 /// Default projector that performs field-by-field protocol projection.
@@ -109,6 +109,7 @@ pub(crate) fn history_item_from_turn_item(item: &TurnItem) -> Option<SessionHist
             body: String::new(),
         }),
         TurnItem::ToolResult(ToolResultItem {
+            tool_name: _,
             output, is_error, ..
         }) => Some(SessionHistoryItem {
             kind: if *is_error {
@@ -138,8 +139,8 @@ impl SessionProjector for DefaultProjection {
         session: &SessionRecord,
         ephemeral: bool,
         status: SessionRuntimeStatus,
-    ) -> SessionSummary {
-        SessionSummary {
+    ) -> SessionMetadata {
+        SessionMetadata {
             session_id: session.id,
             cwd: session.cwd.clone(),
             created_at: session.created_at,
@@ -147,7 +148,8 @@ impl SessionProjector for DefaultProjection {
             title: session.title.clone(),
             title_state: session.title_state.clone(),
             ephemeral,
-            resolved_model: session.model.clone(),
+            model: session.model.clone(),
+            thinking: session.thinking.clone(),
             total_input_tokens: 0,
             total_output_tokens: 0,
             status,
@@ -156,13 +158,16 @@ impl SessionProjector for DefaultProjection {
 }
 
 impl TurnProjector for DefaultProjection {
-    fn project_turn(&self, turn: &TurnRecord) -> TurnSummary {
-        TurnSummary {
+    fn project_turn(&self, turn: &TurnRecord) -> TurnMetadata {
+        TurnMetadata {
             turn_id: turn.id,
             session_id: turn.session_id,
             sequence: turn.sequence,
             status: turn.status.clone(),
-            model_slug: turn.model_slug.clone(),
+            model: turn.model.clone(),
+            thinking: turn.thinking.clone(),
+            request_model: turn.request_model.clone(),
+            request_thinking: turn.request_thinking.clone(),
             started_at: turn.started_at,
             completed_at: turn.completed_at,
             usage: turn.usage.clone(),

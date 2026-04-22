@@ -2319,6 +2319,10 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
 
+        if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+            self.handle_paste(pasted);
+        }
+
         let original_input = self.textarea.text().to_string();
         let original_text_elements = self.textarea.text_elements();
         let original_mention_bindings = self.snapshot_mention_bindings();

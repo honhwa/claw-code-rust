@@ -462,12 +462,15 @@ impl BottomPane {
     }
 
     fn sync_status_line(&mut self) {
-        let animated_prefix = self
+        let animated_prefix = if self
             .status_message
             .as_deref()
             .is_some_and(status_message_is_active)
-            .then_some(FOOTER_STATUS_ANIMATION_PREFIX)
-            .unwrap_or_default();
+        {
+            FOOTER_STATUS_ANIMATION_PREFIX
+        } else {
+            Default::default()
+        };
         let status_line = match (&self.session_summary, &self.status_message) {
             (Some(summary), Some(status)) => {
                 Some(Line::from(format!("{animated_prefix}{status}  |  {summary}")).dim())

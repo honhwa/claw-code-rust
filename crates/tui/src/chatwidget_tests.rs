@@ -163,7 +163,7 @@ fn submit_text_emits_user_turn_with_model_and_thinking() {
 }
 
 #[test]
-fn typed_character_submits_without_waiting_for_redraw_tick() {
+fn typed_character_submits_after_paste_burst_flush() {
     let cwd = std::env::current_dir().expect("current directory is available");
     let model = Model {
         slug: "test-model".to_string(),
@@ -172,8 +172,10 @@ fn typed_character_submits_without_waiting_for_redraw_tick() {
     };
     let (mut widget, mut app_event_rx) = widget_with_model(model, cwd.clone());
 
-    widget.handle_key_event(KeyEvent::from(KeyCode::Char('a')));
-    widget.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    widget.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    std::thread::sleep(crate::bottom_pane::ChatComposer::recommended_paste_flush_delay());
+    widget.pre_draw_tick();
+    widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let emitted_command = std::iter::from_fn(|| app_event_rx.try_recv().ok())
         .find(|event| matches!(event, AppEvent::Command(_)))
@@ -348,6 +350,7 @@ fn active_response_renders_generating_status_without_devo_title() {
 
     widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
         model: "test-model".to_string(),
+        thinking: None,
     });
     widget.handle_worker_event(crate::events::WorkerEvent::TextDelta("hello".to_string()));
 
@@ -433,6 +436,7 @@ fn session_switch_updates_session_identity_projection() {
         cwd: resumed_cwd.clone(),
         title: Some("Resumed".to_string()),
         model: Some("resumed-model".to_string()),
+        thinking: None,
         total_input_tokens: 3,
         total_output_tokens: 5,
         history_items: Vec::new(),
@@ -465,6 +469,7 @@ fn new_session_prepared_resets_session_identity_projection() {
         cwd: resumed_cwd,
         title: None,
         model: Some("resumed-model".to_string()),
+        thinking: None,
         total_input_tokens: 3,
         total_output_tokens: 5,
         history_items: Vec::new(),
@@ -473,6 +478,7 @@ fn new_session_prepared_resets_session_identity_projection() {
     widget.handle_worker_event(crate::events::WorkerEvent::NewSessionPrepared {
         cwd: initial_cwd.clone(),
         model: "new-session-model".to_string(),
+        thinking: None,
     });
 
     assert_eq!(widget.current_cwd(), initial_cwd.as_path());
