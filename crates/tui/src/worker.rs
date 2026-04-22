@@ -926,6 +926,7 @@ fn handle_completed_item(payload: ItemEventPayload, event_tx: &mpsc::UnboundedSe
             };
             let _ = event_tx.send(WorkerEvent::ToolResult {
                 tool_use_id: payload.tool_call_id,
+                title: summarize_tool_result_title(payload.tool_name.as_deref(), payload.is_error),
                 preview: render_json_value_text(&payload.content),
                 is_error: payload.is_error,
                 truncated: false,
@@ -936,25 +937,45 @@ fn handle_completed_item(payload: ItemEventPayload, event_tx: &mpsc::UnboundedSe
 }
 
 fn project_history_items(items: &[SessionHistoryItem]) -> Vec<TranscriptItem> {
+    use std::collections::HashMap;
+
+    let mut paired_result_by_call_id = HashMap::new();
+    let mut consumed_result_indexes = HashMap::new();
+
+    for (index, item) in items.iter().enumerate() {
+        if matches!(
+            item.kind,
+            SessionHistoryItemKind::ToolResult | SessionHistoryItemKind::Error
+        ) && let Some(tool_call_id) = item.tool_call_id.as_deref()
+        {
+            paired_result_by_call_id
+                .entry(tool_call_id.to_string())
+                .or_insert(index);
+        }
+    }
+
     let mut transcript = Vec::new();
     let mut index = 0usize;
 
     while index < items.len() {
         let item = &items[index];
         if item.kind == SessionHistoryItemKind::ToolCall
-            && let Some(next) = items.get(index + 1)
-            && matches!(
-                next.kind,
-                SessionHistoryItemKind::ToolResult | SessionHistoryItemKind::Error
-            )
+            && let Some(tool_call_id) = item.tool_call_id.as_deref()
+            && let Some(result_index) = paired_result_by_call_id.get(tool_call_id).copied()
         {
-            let merged = if next.kind == SessionHistoryItemKind::Error {
-                TranscriptItem::tool_error(item.title.clone(), next.body.clone())
+            let result_item = &items[result_index];
+            consumed_result_indexes.insert(result_index, ());
+            transcript.push(if result_item.kind == SessionHistoryItemKind::Error {
+                TranscriptItem::tool_error(item.title.clone(), result_item.body.clone())
             } else {
-                TranscriptItem::restored_tool_result(item.title.clone(), next.body.clone())
-            };
-            transcript.push(merged);
-            index += 2;
+                TranscriptItem::restored_tool_result(item.title.clone(), result_item.body.clone())
+            });
+            index += 1;
+            continue;
+        }
+
+        if consumed_result_indexes.contains_key(&index) {
+            index += 1;
             continue;
         }
 
@@ -982,6 +1003,15 @@ fn project_history_items(items: &[SessionHistoryItem]) -> Vec<TranscriptItem> {
     }
 
     transcript
+}
+
+fn summarize_tool_result_title(tool_name: Option<&str>, is_error: bool) -> String {
+    match (tool_name, is_error) {
+        (Some(tool_name), true) => format!("{tool_name} error"),
+        (Some(tool_name), false) => format!("{tool_name} output"),
+        (None, true) => "Tool error".to_string(),
+        (None, false) => "Tool output".to_string(),
+    }
 }
 
 fn summarize_tool_call(payload: &ToolCallPayload) -> String {
@@ -1312,11 +1342,13 @@ mod tests {
     fn project_history_merges_tool_call_and_result() {
         let items = vec![
             SessionHistoryItem {
+                tool_call_id: Some("call-1".to_string()),
                 kind: SessionHistoryItemKind::ToolCall,
                 title: "Ran powershell -Command \"Get-Date\"".to_string(),
                 body: String::new(),
             },
             SessionHistoryItem {
+                tool_call_id: Some("call-1".to_string()),
                 kind: SessionHistoryItemKind::ToolResult,
                 title: "Tool output".to_string(),
                 body: "2026-04-09".to_string(),
@@ -1329,6 +1361,44 @@ mod tests {
                 "Ran powershell -Command \"Get-Date\"",
                 "2026-04-09"
             )]
+        );
+    }
+
+    #[test]
+    fn project_history_pairs_tool_results_by_call_id_not_time_adjacency() {
+        let items = vec![
+            SessionHistoryItem {
+                tool_call_id: Some("call-a".to_string()),
+                kind: SessionHistoryItemKind::ToolCall,
+                title: "Ran read a".to_string(),
+                body: String::new(),
+            },
+            SessionHistoryItem {
+                tool_call_id: Some("call-b".to_string()),
+                kind: SessionHistoryItemKind::ToolCall,
+                title: "Ran read b".to_string(),
+                body: String::new(),
+            },
+            SessionHistoryItem {
+                tool_call_id: Some("call-b".to_string()),
+                kind: SessionHistoryItemKind::ToolResult,
+                title: "Tool output".to_string(),
+                body: "B".to_string(),
+            },
+            SessionHistoryItem {
+                tool_call_id: Some("call-a".to_string()),
+                kind: SessionHistoryItemKind::ToolResult,
+                title: "Tool output".to_string(),
+                body: "A".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            project_history_items(&items),
+            vec![
+                TranscriptItem::restored_tool_result("Ran read a", "A"),
+                TranscriptItem::restored_tool_result("Ran read b", "B"),
+            ]
         );
     }
 }

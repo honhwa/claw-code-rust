@@ -62,6 +62,8 @@ pub(crate) enum WorkerEvent {
     ToolResult {
         /// Stable identifier used to match the corresponding tool call.
         tool_use_id: String,
+        /// Human-readable title for the tool result when no prior tool-call row is cached.
+        title: String,
         /// Human-readable output preview shown in the transcript.
         preview: String,
         /// Whether the tool returned an error.

@@ -43,22 +43,28 @@ impl DefaultProjection {
                             SessionHistoryItemKind::Assistant
                         };
                         history.push(SessionHistoryItem {
+                            tool_call_id: None,
                             kind,
                             title: String::new(),
                             body: text.clone(),
                         });
                     }
-                    ContentBlock::ToolUse { name, input, .. } => {
+                    ContentBlock::ToolUse { id, name, input } => {
                         history.push(SessionHistoryItem {
+                            tool_call_id: Some(id.clone()),
                             kind: SessionHistoryItemKind::ToolCall,
                             title: summarize_tool_call(name, input),
                             body: String::new(),
                         });
                     }
                     ContentBlock::ToolResult {
-                        content, is_error, ..
+                        tool_use_id,
+                        content,
+                        is_error,
+                        ..
                     } => {
                         history.push(SessionHistoryItem {
+                            tool_call_id: Some(tool_use_id.clone()),
                             kind: if *is_error {
                                 SessionHistoryItemKind::Error
                             } else {
@@ -85,6 +91,7 @@ pub(crate) fn history_item_from_turn_item(item: &TurnItem) -> Option<SessionHist
     match item {
         TurnItem::UserMessage(TextItem { text }) | TurnItem::SteerInput(TextItem { text }) => {
             Some(SessionHistoryItem {
+                tool_call_id: None,
                 kind: SessionHistoryItemKind::User,
                 title: String::new(),
                 body: text.clone(),
@@ -97,31 +104,33 @@ pub(crate) fn history_item_from_turn_item(item: &TurnItem) -> Option<SessionHist
         | TurnItem::ImageGeneration(TextItem { text })
         | TurnItem::ContextCompaction(TextItem { text })
         | TurnItem::HookPrompt(TextItem { text }) => Some(SessionHistoryItem {
+            tool_call_id: None,
             kind: SessionHistoryItemKind::Assistant,
             title: String::new(),
             body: text.clone(),
         }),
         TurnItem::ToolCall(ToolCallItem {
-            tool_name, input, ..
+            tool_call_id,
+            tool_name,
+            input,
         }) => Some(SessionHistoryItem {
+            tool_call_id: Some(tool_call_id.clone()),
             kind: SessionHistoryItemKind::ToolCall,
             title: summarize_tool_call(tool_name, input),
             body: String::new(),
         }),
         TurnItem::ToolResult(ToolResultItem {
-            tool_name: _,
+            tool_call_id,
+            tool_name,
             output, is_error, ..
         }) => Some(SessionHistoryItem {
+            tool_call_id: Some(tool_call_id.clone()),
             kind: if *is_error {
                 SessionHistoryItemKind::Error
             } else {
                 SessionHistoryItemKind::ToolResult
             },
-            title: if *is_error {
-                "Tool error".to_string()
-            } else {
-                "Tool output".to_string()
-            },
+            title: summarize_tool_result(tool_name.as_deref(), *is_error),
             body: match output {
                 serde_json::Value::String(text) => text.clone(),
                 other => other.to_string(),
@@ -183,5 +192,14 @@ fn summarize_tool_call(tool_name: &str, input: &serde_json::Value) -> String {
             .map(|command| format!("Ran {command}"))
             .unwrap_or_else(|| "Ran shell command".to_string()),
         other => format!("Ran {other}"),
+    }
+}
+
+fn summarize_tool_result(tool_name: Option<&str>, is_error: bool) -> String {
+    match (tool_name, is_error) {
+        (Some(tool_name), true) => format!("{tool_name} error"),
+        (Some(tool_name), false) => format!("{tool_name} output"),
+        (None, true) => "Tool error".to_string(),
+        (None, false) => "Tool output".to_string(),
     }
 }

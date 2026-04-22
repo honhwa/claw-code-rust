@@ -73,6 +73,7 @@ pub enum SessionHistoryItemKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionHistoryItem {
+    pub tool_call_id: Option<String>,
     pub kind: SessionHistoryItemKind,
     pub title: String,
     pub body: String,

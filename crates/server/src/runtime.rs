@@ -1217,6 +1217,7 @@ impl ServerRuntime {
             let mut reasoning_item_id = None;
             let mut reasoning_item_seq = None;
             let mut reasoning_text = String::new();
+            let mut tool_names_by_id = HashMap::new();
             let mut latest_usage: Option<TurnUsage> = None;
             let mut usage_base: Option<(usize, usize)> = None;
             while let Some(event) = event_rx.recv().await {
@@ -1296,6 +1297,7 @@ impl ServerRuntime {
                         let _ = item_seq;
                     }
                     QueryEvent::ToolUseStart { id, name, input } => {
+                        tool_names_by_id.insert(id.clone(), name.clone());
                         if let (Some(item_id), Some(item_seq)) =
                             (assistant_item_id.take(), assistant_item_seq.take())
                         {
@@ -1362,6 +1364,7 @@ impl ServerRuntime {
                         content,
                         is_error,
                     } => {
+                        let tool_name = tool_names_by_id.get(&tool_use_id).cloned();
                         runtime
                             .emit_turn_item(
                                 session_id,
@@ -1369,13 +1372,13 @@ impl ServerRuntime {
                                 ItemKind::ToolResult,
                                 TurnItem::ToolResult(ToolResultItem {
                                     tool_call_id: tool_use_id.clone(),
-                                    tool_name: None,
+                                    tool_name: tool_name.clone(),
                                     output: serde_json::Value::String(content.clone()),
                                     is_error,
                                 }),
                                 serde_json::to_value(ToolResultPayload {
                                     tool_call_id: tool_use_id,
-                                    tool_name: None,
+                                    tool_name,
                                     content: serde_json::Value::String(content),
                                     is_error,
                                 })

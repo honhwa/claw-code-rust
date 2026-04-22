@@ -6,6 +6,7 @@
 //! through `Model` instead of a TUI-local reasoning enum.
 
 use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crossterm::event::KeyCode;
@@ -195,7 +196,7 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     active_cell_revision: u64,
-    active_tool_call: Option<ActiveToolCall>,
+    active_tool_calls: HashMap<String, ActiveToolCall>,
     history: Vec<Box<dyn HistoryCell>>,
     next_history_flush_index: usize,
     queued_user_messages: VecDeque<UserMessage>,
@@ -363,7 +364,7 @@ impl ChatWidget {
         self.next_history_flush_index = 0;
         self.active_cell = None;
         self.active_cell_revision = 0;
-        self.active_tool_call = None;
+        self.active_tool_calls.clear();
         self.active_assistant_text.clear();
         self.active_reasoning_text.clear();
         self.bottom_pane.clear_composer();
@@ -436,7 +437,7 @@ impl ChatWidget {
             bottom_pane,
             active_cell: None,
             active_cell_revision: 0,
-            active_tool_call: None,
+            active_tool_calls: HashMap::new(),
             history,
             next_history_flush_index: 0,
             queued_user_messages,
@@ -584,15 +585,19 @@ impl ChatWidget {
                 let message = detail
                     .map(|detail| format!("{summary}\n{detail}"))
                     .unwrap_or(summary);
-                self.active_tool_call = Some(ActiveToolCall {
-                    tool_use_id,
-                    lines: vec![Line::from(message).patch_style(Self::tool_text_style())],
-                });
+                self.active_tool_calls.insert(
+                    tool_use_id.clone(),
+                    ActiveToolCall {
+                        tool_use_id,
+                        lines: vec![Line::from(message).patch_style(Self::tool_text_style())],
+                    },
+                );
                 self.frame_requester.schedule_frame();
                 self.set_status_message("Tool started");
             }
             WorkerEvent::ToolResult {
                 tool_use_id,
+                title,
                 preview,
                 is_error,
                 truncated,
@@ -604,13 +609,19 @@ impl ChatWidget {
                     DotStatus::Completed
                 };
                 let active_tool_lines = self
-                    .active_tool_call
-                    .take()
-                    .filter(|tool| tool.tool_use_id == tool_use_id)
+                    .active_tool_calls
+                    .remove(&tool_use_id)
                     .map(|tool| tool.lines);
                 if let Some(lines) = active_tool_lines {
                     self.add_to_history(history_cell::AgentMessageCell::new_with_prefix(
                         lines,
+                        Self::dot_prefix(dot_status),
+                        "  ",
+                        false,
+                    ));
+                } else if !title.is_empty() {
+                    self.add_to_history(history_cell::AgentMessageCell::new_with_prefix(
+                        vec![Line::from(title).patch_style(Self::tool_text_style())],
                         Self::dot_prefix(dot_status),
                         "  ",
                         false,
@@ -657,6 +668,7 @@ impl ChatWidget {
                 total_output_tokens,
             } => {
                 self.commit_active_streams(DotStatus::Completed);
+                self.active_tool_calls.clear();
                 self.busy = false;
                 self.turn_count = turn_count;
                 self.total_input_tokens = total_input_tokens;
@@ -670,6 +682,7 @@ impl ChatWidget {
                 total_output_tokens,
             } => {
                 self.commit_active_streams(DotStatus::Failed);
+                self.active_tool_calls.clear();
                 self.busy = false;
                 self.turn_count = turn_count;
                 self.total_input_tokens = total_input_tokens;
@@ -1139,7 +1152,7 @@ impl ChatWidget {
                 ));
             }
             TranscriptItemKind::ToolResult => {
-                let mut lines = Vec::new();
+                let mut lines = vec![Line::from(item.title).patch_style(Self::tool_text_style())];
                 for mut line in truncated_tool_output_preview(&item.body, 80, 12) {
                     line.spans = line
                         .spans

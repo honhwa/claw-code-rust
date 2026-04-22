@@ -332,10 +332,12 @@ impl ReplayState {
 
         let mut replayed_messages = self.messages;
         let mut replayed_history_items = self.history_items;
+        let mut tool_names_by_id = HashMap::new();
         for pending_item in ordered_items {
             apply_turn_item(
                 &mut replayed_messages,
                 &mut replayed_history_items,
+                &mut tool_names_by_id,
                 pending_item.turn_item,
             );
         }
@@ -427,8 +429,36 @@ struct ReplayHistoryItem {
 fn apply_turn_item(
     messages: &mut Vec<Message>,
     history_items: &mut Vec<crate::SessionHistoryItem>,
+    tool_names_by_id: &mut HashMap<String, String>,
     item: TurnItem,
 ) {
+    let item = match item {
+        TurnItem::ToolCall(ToolCallItem {
+            tool_call_id,
+            tool_name,
+            input,
+        }) => {
+            tool_names_by_id.insert(tool_call_id.clone(), tool_name.clone());
+            TurnItem::ToolCall(ToolCallItem {
+                tool_call_id,
+                tool_name,
+                input,
+            })
+        }
+        TurnItem::ToolResult(ToolResultItem {
+            tool_call_id,
+            tool_name,
+            output,
+            is_error,
+        }) => TurnItem::ToolResult(ToolResultItem {
+            tool_call_id: tool_call_id.clone(),
+            tool_name: tool_name.or_else(|| tool_names_by_id.get(&tool_call_id).cloned()),
+            output,
+            is_error,
+        }),
+        other => other,
+    };
+
     if let Some(history_item) = history_item_from_turn_item(&item) {
         history_items.push(history_item);
     }
@@ -578,11 +608,14 @@ pub(crate) fn build_item_record(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use chrono::TimeZone;
     use chrono::Utc;
     use pretty_assertions::assert_eq;
 
     use super::ReplayState;
+    use crate::persistence::apply_turn_item;
     use devo_core::ItemId;
     use devo_core::ItemLine;
     use devo_core::ItemRecord;
@@ -590,6 +623,7 @@ mod tests {
     use devo_core::SessionId;
     use devo_core::TextItem;
     use devo_core::ToolCallItem;
+    use devo_core::ToolResultItem;
     use devo_core::TurnId;
     use devo_core::TurnItem;
 
@@ -668,5 +702,38 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(titles, vec!["assistant 1", "date"]);
+    }
+
+    #[test]
+    fn replay_backfills_tool_result_name_from_prior_tool_call() {
+        let mut messages = Vec::new();
+        let mut history_items = Vec::new();
+        let mut tool_names_by_id = HashMap::new();
+
+        apply_turn_item(
+            &mut messages,
+            &mut history_items,
+            &mut tool_names_by_id,
+            TurnItem::ToolCall(ToolCallItem {
+                tool_call_id: "call-1".to_string(),
+                tool_name: "read".to_string(),
+                input: serde_json::json!({"filePath":"/tmp/test.txt"}),
+            }),
+        );
+        apply_turn_item(
+            &mut messages,
+            &mut history_items,
+            &mut tool_names_by_id,
+            TurnItem::ToolResult(ToolResultItem {
+                tool_call_id: "call-1".to_string(),
+                tool_name: None,
+                output: serde_json::Value::String("hello".to_string()),
+                is_error: false,
+            }),
+        );
+
+        assert_eq!(history_items.len(), 2);
+        assert_eq!(history_items[0].title, "Ran read");
+        assert_eq!(history_items[1].title, "read output");
     }
 }
