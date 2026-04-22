@@ -49,7 +49,6 @@ struct InteractiveLoopState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoopAction {
     Continue,
-    Exit,
     ClearAndExit,
 }
 
@@ -134,7 +133,6 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
                     &mut loop_state,
                 )? {
                     LoopAction::Continue => {}
-                    LoopAction::Exit => break,
                     LoopAction::ClearAndExit => {
                         clear_before_exit(&mut tui)?;
                         break;
@@ -151,7 +149,6 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
                     &mut loop_state,
                 )? {
                     LoopAction::Continue => {}
-                    LoopAction::Exit => break,
                     LoopAction::ClearAndExit => {
                         clear_before_exit(&mut tui)?;
                         break;
@@ -166,7 +163,6 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
                     &mut loop_state,
                 )? {
                     LoopAction::Continue => {}
-                    LoopAction::Exit => break,
                     LoopAction::ClearAndExit => {
                         clear_before_exit(&mut tui)?;
                         break;
@@ -202,7 +198,7 @@ fn handle_tui_event(
     loop_state: &mut InteractiveLoopState,
 ) -> Result<LoopAction> {
     let Some(tui_event) = tui_event else {
-        return Ok(LoopAction::Exit);
+        return Ok(LoopAction::ClearAndExit);
     };
 
     match tui_event {
@@ -257,7 +253,6 @@ fn handle_tui_event(
                 chat_widget.handle_key_event(key);
             }
         }
-        // TODO: Still BUG here, if user pasted long text to the cli, the cli would blow away, take each line as a prompt submit.
         TuiEvent::Paste(pasted) => {
             // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
             // but tui-textarea expects \n. Normalize CR to LF.
@@ -280,7 +275,7 @@ fn handle_app_event(
     loop_state: &mut InteractiveLoopState,
 ) -> Result<LoopAction> {
     let Some(app_event) = app_event else {
-        return Ok(LoopAction::Exit);
+        return Ok(LoopAction::ClearAndExit);
     };
 
     if let AppEvent::Exit(exit_mode) = &app_event {
@@ -288,7 +283,7 @@ fn handle_app_event(
         if matches!(exit_mode, crate::app_event::ExitMode::ShutdownFirst) {
             return Ok(LoopAction::ClearAndExit);
         }
-        return Ok(LoopAction::Exit);
+        return Ok(LoopAction::ClearAndExit);
     }
 
     if let AppEvent::Command(command) = &app_event {
@@ -315,7 +310,7 @@ fn handle_worker_event(
 ) -> Result<LoopAction> {
     let Some(worker_event) = worker_event else {
         chat_widget.set_status_message("Background worker stopped");
-        return Ok(LoopAction::Exit);
+        return Ok(LoopAction::ClearAndExit);
     };
 
     match &worker_event {
