@@ -71,6 +71,8 @@ pub struct ModelRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_body: Option<Value>,
 }
 
@@ -254,6 +256,11 @@ impl Model {
                 .copied()
                 .map(|effort| ReasoningEffortPreset::new(effort, effort.description()))
                 .collect(),
+            ThinkingCapability::ToggleWithLevels(levels) => levels
+                .iter()
+                .copied()
+                .map(|effort| ReasoningEffortPreset::new(effort, effort.description()))
+                .collect(),
             _ => self
                 .default_reasoning_effort
                 .iter()
@@ -285,6 +292,10 @@ impl Model {
         match &self.thinking_capability {
             ThinkingCapability::Unsupported => None,
             ThinkingCapability::Toggle => Some(String::from("enabled")),
+            ThinkingCapability::ToggleWithLevels(levels) => self
+                .default_reasoning_effort
+                .or_else(|| levels.first().copied())
+                .map(|effort| effort.label().to_lowercase()),
             ThinkingCapability::Levels(levels) => self
                 .default_reasoning_effort
                 .or_else(|| levels.first().copied())
@@ -294,7 +305,9 @@ impl Model {
 
     pub fn nearest_supported_reasoning_effort(&self, target: ReasoningEffort) -> ReasoningEffort {
         match &self.thinking_capability {
-            ThinkingCapability::Levels(levels) if !levels.is_empty() => {
+            ThinkingCapability::Levels(levels) | ThinkingCapability::ToggleWithLevels(levels)
+                if !levels.is_empty() =>
+            {
                 nearest_effort(target, levels)
             }
             _ => self.default_reasoning_effort.unwrap_or(target),
@@ -312,30 +325,76 @@ impl Model {
             ThinkingImplementation::Disabled => ResolvedThinkingRequest {
                 request_model: self.slug.clone(),
                 request_thinking: None,
+                request_reasoning_effort: None,
                 effective_reasoning_effort: None,
                 extra_body: None,
             },
             ThinkingImplementation::RequestParameter => {
-                let request_thinking = match self.effective_thinking_capability() {
-                    ThinkingCapability::Unsupported => None,
-                    ThinkingCapability::Toggle => normalized_selection
-                        .filter(|selection| selection == "enabled" || selection == "disabled"),
-                    ThinkingCapability::Levels(_) => normalized_selection.map(|selection| {
-                        let parsed = selection
-                            .parse::<ReasoningEffort>()
-                            .ok()
-                            .map(|effort| self.nearest_supported_reasoning_effort(effort))
-                            .unwrap_or_else(|| self.default_reasoning_effort.unwrap_or_default());
-                        parsed.label().to_lowercase()
-                    }),
-                };
-                let effective_reasoning_effort = request_thinking
-                    .as_deref()
-                    .and_then(|selection| selection.parse::<ReasoningEffort>().ok())
-                    .or(self.default_reasoning_effort);
+                let (request_thinking, request_reasoning_effort, effective_reasoning_effort) =
+                    match self.effective_thinking_capability() {
+                        ThinkingCapability::Unsupported => (None, None, None),
+                        ThinkingCapability::Toggle => {
+                            let request_thinking = normalized_selection
+                                .filter(|selection| {
+                                    selection == "enabled" || selection == "disabled"
+                                })
+                                .or_else(|| self.default_thinking_selection());
+                            let effective_reasoning_effort = self.default_reasoning_effort;
+                            (request_thinking, None, effective_reasoning_effort)
+                        }
+                        ThinkingCapability::Levels(_) => {
+                            let request_reasoning_effort = normalized_selection
+                                .as_deref()
+                                .and_then(|selection| selection.parse::<ReasoningEffort>().ok())
+                                .map(|effort| self.nearest_supported_reasoning_effort(effort))
+                                .or(self.default_reasoning_effort);
+                            (
+                                request_reasoning_effort
+                                    .map(|effort| effort.label().to_lowercase()),
+                                request_reasoning_effort,
+                                request_reasoning_effort,
+                            )
+                        }
+                        ThinkingCapability::ToggleWithLevels(_) => {
+                            let request_reasoning_effort = normalized_selection
+                                .as_deref()
+                                .and_then(|selection| match selection {
+                                    "enabled" => self.default_reasoning_effort,
+                                    "disabled" => None,
+                                    _ => selection.parse::<ReasoningEffort>().ok(),
+                                })
+                                .map(|effort| self.nearest_supported_reasoning_effort(effort))
+                                .or_else(|| {
+                                    normalized_selection
+                                        .as_deref()
+                                        .filter(|selection| *selection == "enabled")
+                                        .and(self.default_reasoning_effort)
+                                });
+                            let request_thinking = normalized_selection.as_deref().map_or_else(
+                                || {
+                                    request_reasoning_effort
+                                        .map(|_| String::from("enabled"))
+                                        .or_else(|| Some(String::from("disabled")))
+                                },
+                                |selection| {
+                                    if selection == "disabled" {
+                                        Some(String::from("disabled"))
+                                    } else {
+                                        Some(String::from("enabled"))
+                                    }
+                                },
+                            );
+                            (
+                                request_thinking,
+                                request_reasoning_effort,
+                                request_reasoning_effort,
+                            )
+                        }
+                    };
                 ResolvedThinkingRequest {
                     request_model: self.slug.clone(),
                     request_thinking,
+                    request_reasoning_effort,
                     effective_reasoning_effort,
                     extra_body: None,
                 }
@@ -363,6 +422,7 @@ impl Model {
                     ResolvedThinkingRequest {
                         request_model: variant.model_slug.clone(),
                         request_thinking: None,
+                        request_reasoning_effort: variant.reasoning_effort,
                         effective_reasoning_effort: variant.reasoning_effort,
                         extra_body: None,
                     }
@@ -370,6 +430,7 @@ impl Model {
                     ResolvedThinkingRequest {
                         request_model: self.slug.clone(),
                         request_thinking: None,
+                        request_reasoning_effort: self.default_reasoning_effort,
                         effective_reasoning_effort: self.default_reasoning_effort,
                         extra_body: None,
                     }
@@ -579,6 +640,32 @@ mod tests {
     }
 
     #[test]
+    fn resolve_thinking_selection_supports_toggle_with_levels() {
+        let mut preset = model("deepseek-v4");
+        preset.thinking_capability =
+            ThinkingCapability::ToggleWithLevels(vec![ReasoningEffort::High, ReasoningEffort::Max]);
+        preset.default_reasoning_effort = Some(ReasoningEffort::High);
+
+        let enabled = preset.resolve_thinking_selection(Some("enabled"));
+        assert_eq!(enabled.request_thinking, Some(String::from("enabled")));
+        assert_eq!(enabled.request_reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            enabled.effective_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+
+        let max = preset.resolve_thinking_selection(Some("max"));
+        assert_eq!(max.request_thinking, Some(String::from("enabled")));
+        assert_eq!(max.request_reasoning_effort, Some(ReasoningEffort::Max));
+        assert_eq!(max.effective_reasoning_effort, Some(ReasoningEffort::Max));
+
+        let disabled = preset.resolve_thinking_selection(Some("disabled"));
+        assert_eq!(disabled.request_thinking, Some(String::from("disabled")));
+        assert_eq!(disabled.request_reasoning_effort, None);
+        assert_eq!(disabled.effective_reasoning_effort, None);
+    }
+
+    #[test]
     fn resolve_thinking_selection_uses_model_variants_when_configured() {
         let mut preset = model("kimi-k2.5");
         preset.thinking_capability = ThinkingCapability::Toggle;
@@ -700,6 +787,7 @@ mod tests {
             tools: None,
             sampling: SamplingControls::default(),
             thinking: None,
+            reasoning_effort: None,
             extra_body: None,
         };
         let json = serde_json::to_string(&req).unwrap();
