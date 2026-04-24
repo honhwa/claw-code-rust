@@ -296,6 +296,14 @@ fn handle_app_event(
         return Ok(LoopAction::ClearAndExit);
     }
 
+    if matches!(&app_event, AppEvent::Interrupt) {
+        if loop_state.busy {
+            worker.interrupt_turn()?;
+        }
+        chat_widget.handle_app_event(app_event);
+        return Ok(LoopAction::Continue);
+    }
+
     if let AppEvent::Command(command) = &app_event {
         chat_widget.handle_app_event(app_event.clone());
         // Commands that affect sessions, providers, or turns are forwarded to the worker.
