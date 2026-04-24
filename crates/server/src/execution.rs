@@ -9,6 +9,7 @@ use tokio::{sync::Mutex, task::JoinHandle};
 use devo_core::{
     Model, ModelCatalog, ResolvedSkill, SessionConfig, SessionId, SessionRecord, SessionState,
     SkillCatalog, SkillError, SkillId, TurnConfig, default_base_instructions,
+    normalize_canonical_path,
 };
 use devo_provider::ModelProviderSDK;
 use devo_tools::ToolRegistry;
@@ -109,7 +110,7 @@ impl ServerRuntimeDependencies {
                     id: record.id.0.to_string(),
                     name: record.name,
                     description: record.description,
-                    path: record.path,
+                    path: normalize_canonical_path(record.path),
                     enabled: record.enabled,
                     source: serde_json::from_value(
                         serde_json::to_value(record.source)
@@ -161,7 +162,14 @@ impl ServerRuntimeDependencies {
 }
 
 fn render_resolved_skill(skill: &ResolvedSkill) -> String {
-    let base_dir = skill.record.path.parent().unwrap_or_else(|| Path::new(""));
+    let base_dir = normalize_canonical_path(
+        skill
+            .record
+            .path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf(),
+    );
     format!(
         "<skill id=\"{}\" name=\"{}\">\n{}\n\nBase directory: {}\n</skill>",
         skill.record.id.0,

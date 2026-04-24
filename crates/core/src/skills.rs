@@ -339,7 +339,7 @@ fn parse_frontmatter_string(value: &str) -> String {
     quoted.unwrap_or(trimmed).trim().to_string()
 }
 
-fn normalize_canonical_path(path: PathBuf) -> PathBuf {
+pub fn normalize_canonical_path(path: PathBuf) -> PathBuf {
     #[cfg(windows)]
     {
         let normalized = path

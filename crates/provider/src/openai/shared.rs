@@ -32,7 +32,9 @@ pub(crate) fn request_role(role: &str) -> OpenAIRole {
 
 pub(crate) enum OpenAIReasoningValue {
     Effort(ReasoningEffort),
-    Thinking { enabled: bool },
+    Thinking {
+        enabled: bool,
+    },
     ThinkingWithEffort {
         enabled: bool,
         effort: Option<ReasoningEffort>,

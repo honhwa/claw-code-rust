@@ -651,7 +651,10 @@ mod tests {
 
         let enabled = preset.resolve_thinking_selection(Some("enabled"));
         assert_eq!(enabled.request_thinking, Some(String::from("enabled")));
-        assert_eq!(enabled.request_reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            enabled.request_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
         assert_eq!(
             enabled.effective_reasoning_effort,
             Some(ReasoningEffort::High)

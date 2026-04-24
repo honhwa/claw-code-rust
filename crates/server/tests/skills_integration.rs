@@ -98,7 +98,9 @@ fn create_skill(root: &Path, name: &str, content: &str) -> PathBuf {
 }
 
 fn canonical_skill_path(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).expect("canonicalize skill path")
+    devo_core::normalize_canonical_path(
+        std::fs::canonicalize(path).expect("canonicalize skill path"),
+    )
 }
 
 fn canonical_skill_base_dir(path: &Path) -> PathBuf {

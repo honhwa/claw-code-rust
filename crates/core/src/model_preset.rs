@@ -125,16 +125,14 @@ impl From<ModelPreset> for Model {
             }
             capability => capability,
         };
-        let default_reasoning_effort = if matches!(
-            thinking_capability,
-            ThinkingCapability::ToggleWithLevels(_)
-        ) {
-            value
-                .default_reasoning_effort
-                .or_else(|| value.supported_reasoning_levels.first().copied())
-        } else {
-            value.default_reasoning_effort
-        };
+        let default_reasoning_effort =
+            if matches!(thinking_capability, ThinkingCapability::ToggleWithLevels(_)) {
+                value
+                    .default_reasoning_effort
+                    .or_else(|| value.supported_reasoning_levels.first().copied())
+            } else {
+                value.default_reasoning_effort
+            };
 
         Self {
             slug: value.slug,
