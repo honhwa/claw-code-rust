@@ -632,7 +632,7 @@ fn active_assistant_markdown_does_not_double_wrap() {
         ..Model::default()
     };
     let (mut widget, _app_event_rx) = widget_with_model(model, cwd);
-    let body = format!("{} betabet gamma", vec!["alpha"; 12].join(" "));
+    let body = format!("{} betabet gamma", ["alpha"; 12].join(" "));
 
     widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
         model: "test-model".to_string(),
@@ -656,7 +656,7 @@ fn committed_assistant_markdown_does_not_double_wrap() {
         ..Model::default()
     };
     let (mut widget, _app_event_rx) = widget_with_model(model, cwd);
-    let body = format!("{} betabet gamma", vec!["alpha"; 12].join(" "));
+    let body = format!("{} betabet gamma", ["alpha"; 12].join(" "));
 
     widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
         model: "test-model".to_string(),

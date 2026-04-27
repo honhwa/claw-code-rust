@@ -42,14 +42,13 @@ Henüz kararlı bir sürüm yok — aşağıdaki adımları izleyerek projeyi ka
 ### Derleme
 
 ```bash
-git clone https://github.com/claw-cli/devo && cd devo
+git clone https://github.com/7df-lab/devo && cd devo
 cargo build --release
-https://github.com/7df-lab/devo
 # linux / macos
 ./target/release/devo onboard
 
 # windows
-.\target\release\devo onboard
+curl.exe -fsSL https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1 | powershell -NoProfile -ExecutionPolicy Bypass -Command -
 ```
 
 > [!TIP]

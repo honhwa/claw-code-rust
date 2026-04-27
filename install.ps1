@@ -4,7 +4,7 @@
 #   irm https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1 | iex
 #
 # Pin a specific version:
-#   $env:VERSION = "v0.1.0"; irm https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1 | iex
+#   $env:VERSION = "v0.1.2"; irm https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 $Repo = "7df-lab/devo"
@@ -18,14 +18,17 @@ function Get-Target {
     return "${arch}-pc-windows-msvc"
 }
 
-# ── Resolve version ──────────────────────────────────────────────────────
-function Resolve-Version {
-    if ($env:VERSION) {
-        return $env:VERSION
+function Normalize-PathEntry {
+    param(
+        [string]$Value
+    )
+
+    $normalized = $Value.Trim()
+    while ($normalized.Length -gt 3 -and $normalized.EndsWith("\\")) {
+        $normalized = $normalized.Substring(0, $normalized.Length - 1)
     }
 
-    $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-    return $latest.tag_name
+    return $normalized
 }
 
 function Test-PathEntryPresent {
@@ -38,14 +41,13 @@ function Test-PathEntryPresent {
         return $false
     }
 
-    $normalizedEntry = [IO.Path]::TrimEndingDirectorySeparator($Entry)
+    $normalizedEntry = Normalize-PathEntry $Entry
     foreach ($candidate in ($PathValue -split ";")) {
         if ([string]::IsNullOrWhiteSpace($candidate)) {
             continue
         }
 
-        $normalizedCandidate = [IO.Path]::TrimEndingDirectorySeparator($candidate.Trim())
-        if ($normalizedCandidate -ieq $normalizedEntry) {
+        if ((Normalize-PathEntry $candidate) -ieq $normalizedEntry) {
             return $true
         }
     }
@@ -69,8 +71,56 @@ function Add-InstallDirToPath {
     }
 
     if (-not (Test-PathEntryPresent -PathValue $env:Path -Entry $InstallDir)) {
-        $env:Path = "$InstallDir;$env:Path"
+        $env:Path = if ([string]::IsNullOrWhiteSpace($env:Path)) {
+            $InstallDir
+        } else {
+            "$InstallDir;$env:Path"
+        }
     }
+}
+
+function Broadcast-EnvironmentChange {
+    if (-not ("Win32.NativeMethods" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+namespace Win32 {
+    public static class NativeMethods {
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern IntPtr SendMessageTimeout(
+            IntPtr hWnd,
+            int Msg,
+            UIntPtr wParam,
+            string lParam,
+            int fuFlags,
+            int uTimeout,
+            out UIntPtr lpdwResult);
+    }
+}
+"@
+    }
+
+    $result = [UIntPtr]::Zero
+    [Win32.NativeMethods]::SendMessageTimeout(
+        [IntPtr]0xffff,
+        0x1A,
+        [UIntPtr]::Zero,
+        "Environment",
+        2,
+        5000,
+        [ref]$result
+    ) | Out-Null
+}
+
+# ── Resolve version ──────────────────────────────────────────────────────
+function Resolve-Version {
+    if ($env:VERSION) {
+        return $env:VERSION
+    }
+
+    $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+    return $latest.tag_name
 }
 
 # ── Install ──────────────────────────────────────────────────────────────

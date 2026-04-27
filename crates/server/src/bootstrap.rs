@@ -17,7 +17,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum ServerTransportMode {
+pub enum ServerTransportMode {
     Config,
     Stdio,
 }
@@ -32,7 +32,7 @@ pub struct ServerProcessArgs {
 
     /// Override the transport mode used by this server process.
     #[arg(long, value_enum, hide = true, default_value_t = ServerTransportMode::Config)]
-    transport: ServerTransportMode,
+    pub transport: ServerTransportMode,
 }
 
 /// Starts the transport-facing server runtime using the resolved application

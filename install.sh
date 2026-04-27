@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/7df-lab/devo/main/install.sh | sh
 #
 # You can pin a specific version by setting the VERSION env var:
-#   VERSION=v0.1.0 curl -fsSL ... | sh
+#   VERSION=v0.1.2 curl -fsSL ... | sh
 
 set -eu
 
@@ -213,7 +213,7 @@ main() {
     install_dir="$(choose_install_dir)"
     mkdir -p "$install_dir"
 
-    # The archive contains a top-level directory like devo-v0.1.0-x86_64-unknown-linux-gnu/devo
+    # The archive contains a top-level directory like devo-v0.1.2-x86_64-unknown-linux-gnu/devo
     bin_src="$(find "$tmpdir" -name 'devo' -type f | head -1)"
     install -m 755 "$bin_src" "$install_dir/devo"
 

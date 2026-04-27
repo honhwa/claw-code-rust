@@ -1,4 +1,5 @@
 use std::net::TcpListener as StdTcpListener;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -88,13 +89,16 @@ async fn stdio_server_process_supports_handshake_and_session_start() -> Result<(
 
     let test_cwd = home_dir.path().to_string_lossy().into_owned();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_devo-server"))
+    let mut child = Command::new(devo_binary_path()?)
+        .arg("server")
+        .arg("--transport")
+        .arg("stdio")
         .env("DEVO_HOME", home_dir.path().join(".devo"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .context("spawn devo-server child process")?;
+        .context("spawn devo child process in server mode")?;
 
     let mut stdin = child.stdin.take().context("capture child stdin")?;
     let stdout = child.stdout.take().context("capture child stdout")?;
@@ -379,6 +383,14 @@ async fn websocket_listener_supports_handshake_subscription_and_turn_lifecycle()
     listener_task.abort();
     let _ = listener_task.await;
     Ok(())
+}
+
+fn devo_binary_path() -> Result<PathBuf> {
+    let mut path = std::env::current_exe()?;
+    path.pop();
+    path.pop();
+    path.push(if cfg!(windows) { "devo.exe" } else { "devo" });
+    Ok(path)
 }
 
 async fn read_websocket_json(

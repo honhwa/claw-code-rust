@@ -28,14 +28,29 @@
 
 ## 📖 目录
 
+- [安装](#-安装)
 - [快速开始](#-快速开始)
 - [常见问题](#-常见问题)
 - [参与贡献](#-参与贡献)
 - [许可证](#-许可证)
 
+## 📦 安装
+
+### Linux / macOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/7df-lab/devo/main/install.sh | sh
+```
+
+### Windows
+
+```powershell
+curl.exe -fsSL https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1 | powershell -NoProfile -ExecutionPolicy Bypass -Command -
+```
+
 ## 🚀 快速开始
 
-还没有稳定版本 — 你可以按照以下说明从源码构建项目。
+如果你更想从源码构建，可以使用下面的说明。
 
 ### 构建
 

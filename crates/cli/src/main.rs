@@ -6,6 +6,9 @@ use clap::builder::TypedValueParser as _;
 use devo_core::AppConfigLoader;
 use devo_core::LoggingBootstrap;
 use devo_core::LoggingRuntime;
+use devo_server::run_server_process;
+use devo_server::ServerProcessArgs;
+use devo_server::ServerTransportMode;
 use devo_utils::find_devo_home;
 use tracing_subscriber::filter::LevelFilter;
 
@@ -20,8 +23,6 @@ use prompt_command::run_prompt;
 /// Top-level `devo` command that dispatches to interactive agent mode or one
 /// of the supporting runtime subcommands.
 ///
-/// The `devo-server` sub-binary is handled by `devo_arg0::run_as` via `argv[0]`
-/// dispatch and is not listed as a subcommand here.
 #[derive(Debug, Parser)]
 #[command(name = "devo", version, about = "Devo CLI")]
 struct Cli {
@@ -48,21 +49,36 @@ fn main() -> Result<()> {
 
 async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
-
-    // Resolve logging config early, install the process-wide file subscriber,
-    // and keep its non-blocking writer guard alive for the command lifetime.
-    let _logging = install_logging(&cli)?;
     let log_level = cli.log_level.map(|level| level.to_string());
 
-    match cli.command {
+    match &cli.command {
         Some(Command::Onboard) => {
+            // Resolve logging config early, install the process-wide file subscriber,
+            // and keep its non-blocking writer guard alive for the command lifetime.
+            let _logging = install_logging(&cli)?;
             run_agent(/*force_onboarding*/ true, log_level.as_deref()).await
         }
         Some(Command::Prompt { input }) => {
-            run_prompt(&input, cli.model.as_deref(), log_level.as_deref()).await
+            let _logging = install_logging(&cli)?;
+            run_prompt(input, cli.model.as_deref(), log_level.as_deref()).await
         }
-        Some(Command::Doctor) => run_doctor().await,
+        Some(Command::Doctor) => {
+            let _logging = install_logging(&cli)?;
+            run_doctor().await
+        }
+        Some(Command::Server {
+            working_root,
+            transport,
+        }) => {
+            let args = ServerProcessArgs {
+                working_root: working_root.clone(),
+                transport: *transport,
+            };
+            let _logging = install_server_logging(&args)?;
+            run_server_process(args).await
+        }
         None => {
+            let _logging = install_logging(&cli)?;
             run_agent(/*force_onboarding*/ false, log_level.as_deref()).await
         }
     }
@@ -79,6 +95,16 @@ enum Command {
     },
     /// Diagnose configuration, provider connectivity, and system health.
     Doctor,
+    /// Start the runtime server process.
+    #[command(hide = true)]
+    Server {
+        /// Optional workspace root used for project-level config resolution.
+        #[arg(long)]
+        working_root: Option<std::path::PathBuf>,
+        /// Override the transport mode used by this server process.
+        #[arg(long, value_enum, hide = true, default_value_t = ServerTransportMode::Config)]
+        transport: ServerTransportMode,
+    },
 }
 
 fn install_logging(cli: &Cli) -> Result<LoggingRuntime> {
@@ -92,6 +118,24 @@ fn install_logging(cli: &Cli) -> Result<LoggingRuntime> {
         });
     LoggingBootstrap {
         process_name: "cli",
+        config: app_config.logging,
+        home_dir,
+    }
+    .install()
+    .map_err(Into::into)
+}
+
+fn install_server_logging(args: &ServerProcessArgs) -> Result<LoggingRuntime> {
+    let home_dir = find_devo_home()?;
+    let loader = devo_core::FileSystemAppConfigLoader::new(home_dir.clone());
+    let app_config = loader
+        .load(args.working_root.as_deref())
+        .unwrap_or_else(|err| {
+            eprintln!("warning: failed to load app config for logging: {err}");
+            devo_core::AppConfig::default()
+        });
+    LoggingBootstrap {
+        process_name: "server",
         config: app_config.logging,
         home_dir,
     }

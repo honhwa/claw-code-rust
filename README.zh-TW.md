@@ -47,7 +47,7 @@ cargo build --release
 ./target/release/devo onboard
 
 # windows
-.\target\release\devo onboard
+curl.exe -fsSL https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1 | powershell -NoProfile -ExecutionPolicy Bypass -Command -
 ```
 
 > [!TIP]

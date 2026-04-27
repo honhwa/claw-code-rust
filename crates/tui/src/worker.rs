@@ -825,14 +825,18 @@ async fn ensure_session_started(
 }
 
 async fn spawn_client(cwd: &Path, server_log_level: Option<String>) -> Result<StdioServerClient> {
+    let program = std::env::current_exe().context("resolve current executable for server child")?;
     StdioServerClient::spawn(StdioServerClientConfig {
-        // Use the argv[0] alias created by devo-arg0 so the child process enters
-        // server mode through single-binary dispatch instead of a CLI subcommand.
-        program: PathBuf::from("devo-server"),
+        // Re-exec the current binary and enter the hidden server subcommand.
+        program,
         workspace_root: Some(cwd.to_path_buf()),
-        args: server_log_level
-            .into_iter()
-            .flat_map(|level| ["--log-level".to_string(), level])
+        args: std::iter::once("server".to_string())
+            .chain(["--transport".to_string(), "stdio".to_string()])
+            .chain(
+                server_log_level
+                    .into_iter()
+                    .flat_map(|level| ["--log-level".to_string(), level]),
+            )
             .collect(),
     })
     .await
