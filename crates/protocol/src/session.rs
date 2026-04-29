@@ -5,6 +5,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::ReasoningEffort;
 use crate::SessionId;
 use crate::SessionTitleState;
 use crate::turn::TurnMetadata;
@@ -30,6 +31,7 @@ pub struct SessionMetadata {
     pub ephemeral: bool,
     pub model: Option<String>,
     pub thinking: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub total_input_tokens: usize,
     pub total_output_tokens: usize,
     pub prompt_token_estimate: usize,
@@ -174,6 +176,7 @@ mod tests {
             ephemeral: false,
             model: Some("test-model".to_string()),
             thinking: Some("medium".to_string()),
+            reasoning_effort: Some(crate::ReasoningEffort::Medium),
             total_input_tokens: 12,
             total_output_tokens: 34,
             prompt_token_estimate: 21,

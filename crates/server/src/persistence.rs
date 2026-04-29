@@ -361,6 +361,17 @@ impl ReplayState {
                     kind: line.turn.kind.clone(),
                     model: line.turn.model.clone(),
                     thinking: line.turn.thinking.clone(),
+                    reasoning_effort: line
+                        .turn
+                        .turn_context
+                        .as_ref()
+                        .and_then(|context| context.reasoning_effort)
+                        .or_else(|| {
+                            line.turn
+                                .session_context
+                                .as_ref()
+                                .and_then(|context| context.reasoning_effort)
+                        }),
                     request_model: line.turn.request_model.clone(),
                     request_thinking: line.turn.request_thinking.clone(),
                     started_at: line.turn.started_at,
@@ -463,6 +474,16 @@ impl ReplayState {
             ephemeral: false,
             model: record.model.clone(),
             thinking: record.thinking.clone(),
+            reasoning_effort: core_session
+                .latest_turn_context
+                .as_ref()
+                .and_then(|context| context.reasoning_effort)
+                .or_else(|| {
+                    core_session
+                        .session_context
+                        .as_ref()
+                        .and_then(|context| context.reasoning_effort)
+                }),
             total_input_tokens: self.total_input_tokens,
             total_output_tokens: self.total_output_tokens,
             prompt_token_estimate: core_session.prompt_token_estimate,

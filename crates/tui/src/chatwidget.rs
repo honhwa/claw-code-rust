@@ -88,6 +88,7 @@ pub(crate) struct TuiSessionState {
     pub(crate) cwd: PathBuf,
     pub(crate) model: Option<Model>,
     pub(crate) provider: Option<ProviderWireApi>,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl TuiSessionState {
@@ -97,6 +98,7 @@ impl TuiSessionState {
             cwd,
             model,
             provider,
+            reasoning_effort: None,
         }
     }
 }
@@ -175,6 +177,7 @@ struct ResumeBrowserState {
 #[derive(Debug, Clone)]
 struct ActiveToolCall {
     tool_use_id: String,
+    title: String,
     lines: Vec<Line<'static>>,
 }
 
@@ -248,15 +251,14 @@ impl ChatWidget {
             provider: ProviderWireApi::OpenAIChatCompletions,
             ..Model::default()
         });
-        let effective_effort = model
-            .resolve_thinking_selection(thinking_selection)
-            .effective_reasoning_effort;
         Box::new(history_cell::new_session_info(
             cwd,
             &model.slug,
             model.display_name.clone(),
             model.thinking_capability.clone(),
-            effective_effort,
+            model
+                .resolve_thinking_selection(thinking_selection)
+                .effective_reasoning_effort,
             model.thinking_implementation.clone(),
             is_first_run,
             startup_tooltip_override,
@@ -303,6 +305,39 @@ impl ChatWidget {
 
     fn tool_text_style() -> Style {
         Style::default().fg(Color::Rgb(176, 176, 176))
+    }
+
+    fn running_tool_prefix_style() -> Style {
+        Style::default()
+            .fg(Color::Rgb(110, 200, 255))
+            .bold()
+            .italic()
+    }
+
+    fn ran_tool_prefix_style() -> Style {
+        Style::default().fg(Color::Rgb(120, 220, 160)).bold()
+    }
+
+    fn running_tool_line(title: &str) -> Line<'static> {
+        let normalized = title
+            .strip_prefix("Running ")
+            .or_else(|| title.strip_prefix("Ran "))
+            .unwrap_or(title);
+        Line::from(vec![
+            Span::styled("Running ", Self::running_tool_prefix_style()),
+            Span::styled(normalized.to_string(), Self::tool_text_style()),
+        ])
+    }
+
+    fn ran_tool_line(title: &str) -> Line<'static> {
+        let normalized = title
+            .strip_prefix("Running ")
+            .or_else(|| title.strip_prefix("Ran "))
+            .unwrap_or(title);
+        Line::from(vec![
+            Span::styled("Ran ", Self::ran_tool_prefix_style()),
+            Span::styled(normalized.to_string(), Self::tool_text_style()),
+        ])
     }
 
     fn tool_dot_prefix() -> Line<'static> {
@@ -356,9 +391,8 @@ impl ChatWidget {
         let ratio = (used as f64 / total as f64).clamp(0.0, 1.0);
         let filled = (ratio * bar_width as f64).round() as usize;
         let empty = bar_width.saturating_sub(filled);
-        let bar: String = std::iter::repeat('█')
-            .take(filled)
-            .chain(std::iter::repeat('░').take(empty))
+        let bar: String = std::iter::repeat_n('█', filled)
+            .chain(std::iter::repeat_n('░', empty))
             .collect();
         let pct = (ratio * 100.0).round() as usize;
         format!("{bar} {pct}% ({})", Self::format_compact_token_count(used))
@@ -372,10 +406,11 @@ impl ChatWidget {
             .map(|model| model.slug.as_str())
             .unwrap_or("unknown");
         let thinking = self.thinking_selection.as_deref().unwrap_or("default");
-        let context = self.context_budget().map_or_else(
-            || String::new(),
-            |(used, usable, _total)| Self::render_progress_bar(used, usable, 10),
-        );
+        let context = self
+            .context_budget()
+            .map_or_else(String::new, |(used, usable, _total)| {
+                Self::render_progress_bar(used, usable, 10)
+            });
 
         let mut parts: Vec<String> = Vec::new();
         parts.push(format!("{model} {thinking}"));
@@ -702,12 +737,14 @@ impl ChatWidget {
             WorkerEvent::TurnStarted {
                 model,
                 thinking,
+                reasoning_effort,
                 turn_id,
                 ..
             } => {
                 self.active_turn_id = Some(turn_id);
                 self.update_session_request_model(model);
                 self.thinking_selection = thinking;
+                self.session.reasoning_effort = reasoning_effort;
                 self.refresh_header_box();
                 self.busy = true;
                 self.active_assistant_text.clear();
@@ -747,14 +784,15 @@ impl ChatWidget {
                 // active viewport alongside reasoning/assistant text.
                 // If summary already has a key detail (e.g. "read: src/main.rs"),
                 // skip the redundant JSON preview.
-                let message = if summary.contains(": ") {
+                let title = if summary.contains(": ") {
                     summary
                 } else {
                     detail.unwrap_or_else(|| summary.clone())
                 };
                 let tool_call = ActiveToolCall {
                     tool_use_id: tool_use_id.clone(),
-                    lines: vec![Line::from(message).patch_style(Self::tool_text_style())],
+                    title: title.clone(),
+                    lines: vec![Self::running_tool_line(&title)],
                 };
                 self.active_tool_calls
                     .insert(tool_use_id.clone(), tool_call.clone());
@@ -801,41 +839,30 @@ impl ChatWidget {
                 } else {
                     DotStatus::Completed
                 };
-                let active_tool_lines = self
+                let resolved_title = self
                     .active_tool_calls
                     .remove(&tool_use_id)
-                    .map(|tool| tool.lines);
-                if let Some(lines) = active_tool_lines {
-                    self.add_to_history(history_cell::AgentMessageCell::new_with_prefix(
-                        lines,
-                        Self::dot_prefix(dot_status),
-                        "  ",
-                        false,
-                    ));
-                } else if !title.is_empty() {
-                    self.add_to_history(history_cell::AgentMessageCell::new_with_prefix(
-                        vec![Line::from(title.clone()).patch_style(Self::tool_text_style())],
-                        Self::dot_prefix(dot_status),
-                        "  ",
-                        false,
-                    ));
-                }
+                    .map(|tool| tool.title)
+                    .filter(|tool_title| !tool_title.is_empty())
+                    .unwrap_or(title);
 
                 let mut lines = Vec::new();
                 let mut preview_lines = self.tool_preview_lines(&preview);
                 if truncated && preview_lines.is_empty() {
                     preview_lines.push(Line::from("…").patch_style(Self::tool_text_style()));
                 }
-                if !title.is_empty() {
-                    lines.push(Line::from(title).patch_style(Self::tool_text_style()));
+                if !resolved_title.is_empty() {
+                    lines.push(Self::ran_tool_line(&resolved_title));
                 }
                 lines.extend(preview_lines);
-                self.add_to_history(history_cell::AgentMessageCell::new_with_prefix(
-                    lines,
-                    Self::dot_prefix(dot_status),
-                    "  ",
-                    false,
-                ));
+                if !lines.is_empty() {
+                    self.add_to_history(history_cell::AgentMessageCell::new_with_prefix(
+                        lines,
+                        Self::dot_prefix(dot_status),
+                        "  ",
+                        false,
+                    ));
+                }
                 self.set_status_message(if is_error {
                     "Tool returned an error"
                 } else {
@@ -942,11 +969,13 @@ impl ChatWidget {
                 cwd,
                 model,
                 thinking,
+                reasoning_effort,
             } => {
                 self.resume_browser_loading = false;
                 self.session.cwd = cwd;
                 self.update_session_request_model(model);
                 self.thinking_selection = thinking;
+                self.session.reasoning_effort = reasoning_effort;
                 self.active_assistant_text.clear();
                 self.active_reasoning_text.clear();
                 self.active_assistant_cell = None;
@@ -970,6 +999,7 @@ impl ChatWidget {
                 title,
                 model,
                 thinking,
+                reasoning_effort,
                 total_input_tokens,
                 total_output_tokens,
                 prompt_token_estimate,
@@ -982,6 +1012,7 @@ impl ChatWidget {
                     self.update_session_request_model(model);
                 }
                 self.thinking_selection = thinking;
+                self.session.reasoning_effort = reasoning_effort;
                 self.history.clear();
                 self.next_history_flush_index = 0;
                 self.active_assistant_text.clear();
@@ -1329,6 +1360,9 @@ impl ChatWidget {
 
     pub(crate) fn set_model(&mut self, model: Model) {
         self.thinking_selection = model.default_thinking_selection();
+        self.session.reasoning_effort = model
+            .resolve_thinking_selection(self.thinking_selection.as_deref())
+            .effective_reasoning_effort;
         self.session.provider = Some(model.provider_wire_api());
         self.session.model = Some(model);
         if self.onboarding_step.is_none() {
@@ -1344,6 +1378,9 @@ impl ChatWidget {
             .find(|model| model.slug == slug)
             .cloned()
         {
+            self.session.reasoning_effort = model
+                .resolve_thinking_selection(self.thinking_selection.as_deref())
+                .effective_reasoning_effort;
             self.session.provider = Some(model.provider_wire_api());
             self.session.model = Some(model);
             return;
@@ -1352,6 +1389,9 @@ impl ChatWidget {
         if let Some(model) = self.session.model.as_mut() {
             model.slug = slug.clone();
             model.display_name = slug;
+            self.session.reasoning_effort = model
+                .resolve_thinking_selection(self.thinking_selection.as_deref())
+                .effective_reasoning_effort;
             return;
         }
 
@@ -1364,6 +1404,12 @@ impl ChatWidget {
                 .unwrap_or(ProviderWireApi::OpenAIChatCompletions),
             ..Model::default()
         });
+        self.session.reasoning_effort = self
+            .session
+            .model
+            .as_ref()
+            .map(|model| model.resolve_thinking_selection(self.thinking_selection.as_deref()))
+            .and_then(|resolved| resolved.effective_reasoning_effort);
     }
 
     fn add_markdown_history(&mut self, title: &str, body: &str) {
@@ -1487,7 +1533,7 @@ impl ChatWidget {
             TranscriptItemKind::ToolCall => {
                 self.add_history_entry_without_redraw(Box::new(
                     history_cell::AgentMessageCell::new_with_prefix(
-                        vec![Line::from(item.title).patch_style(Self::tool_text_style())],
+                        vec![Self::ran_tool_line(&item.title)],
                         Self::tool_dot_prefix(),
                         "  ",
                         false,
@@ -1495,7 +1541,7 @@ impl ChatWidget {
                 ));
             }
             TranscriptItemKind::ToolResult => {
-                let mut lines = vec![Line::from(item.title).patch_style(Self::tool_text_style())];
+                let mut lines = vec![Self::ran_tool_line(&item.title)];
                 lines.extend(self.tool_preview_lines(&item.body));
                 self.add_history_entry_without_redraw(Box::new(
                     history_cell::AgentMessageCell::new_with_prefix(
@@ -1614,6 +1660,12 @@ impl ChatWidget {
 
     pub(crate) fn set_thinking_selection(&mut self, selection: Option<String>) {
         self.thinking_selection = selection;
+        self.session.reasoning_effort = self
+            .session
+            .model
+            .as_ref()
+            .map(|model| model.resolve_thinking_selection(self.thinking_selection.as_deref()))
+            .and_then(|resolved| resolved.effective_reasoning_effort);
         self.refresh_header_box();
         self.frame_requester.schedule_frame();
     }
@@ -1650,11 +1702,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffort> {
-        self.session
-            .model
-            .as_ref()
-            .map(|model| model.resolve_thinking_selection(self.thinking_selection.as_deref()))
-            .and_then(|resolved| resolved.effective_reasoning_effort)
+        self.session.reasoning_effort.or_else(|| {
+            self.session
+                .model
+                .as_ref()
+                .map(|model| model.resolve_thinking_selection(self.thinking_selection.as_deref()))
+                .and_then(|resolved| resolved.effective_reasoning_effort)
+        })
     }
 
     fn reasoning_text_style() -> Style {

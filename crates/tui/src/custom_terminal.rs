@@ -196,10 +196,10 @@ where
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
             hidden_cursor: false,
-            viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
+            viewport_area: Rect::new(0, cursor_pos.y.saturating_add(1), 0, 0),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
-            session_origin_top: cursor_pos.y,
+            session_origin_top: cursor_pos.y.saturating_add(1),
             visible_history_rows: 0,
         })
     }

@@ -31,12 +31,12 @@ impl ToolHandler for ReadHandler {
         let offset = invocation.input["offset"].as_u64().map(|v| v as usize);
         let limit = invocation.input["limit"].as_u64().map(|v| v as usize);
 
-        if let Some(offset) = offset {
-            if offset < 1 {
-                return Ok(Box::new(FunctionToolOutput::error(
-                    "offset must be greater than or equal to 1",
-                )));
-            }
+        if let Some(offset) = offset
+            && offset < 1
+        {
+            return Ok(Box::new(FunctionToolOutput::error(
+                "offset must be greater than or equal to 1",
+            )));
         }
 
         if !PathBuf::from(&filepath).is_absolute() {

@@ -273,14 +273,11 @@ pub async fn collect_output(
             }
         }
 
-        let done = !process.is_running() || (process.exit_code().is_some() && output_rx.len() == 0);
+        let done = !process.is_running() || (process.exit_code().is_some() && output_rx.is_empty());
 
         if done {
-            loop {
-                match output_rx.try_recv() {
-                    Ok(bytes) => buf.push(&bytes),
-                    Err(_) => break,
-                }
+            while let Ok(bytes) = output_rx.try_recv() {
+                buf.push(&bytes);
             }
             break;
         }
@@ -316,11 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn process_spawn_and_exit() {
-        let cmd = if cfg!(windows) {
-            "echo hello"
-        } else {
-            "echo hello"
-        };
+        let cmd = "echo hello";
         let (proc, mut rx) = UnifiedExecProcess::spawn(1, cmd, Path::new("."), None, false)
             .expect("spawn should succeed");
 

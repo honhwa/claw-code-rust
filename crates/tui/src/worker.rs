@@ -12,6 +12,7 @@ use devo_core::Model;
 use devo_core::ModelCatalog;
 use devo_core::PresetModelCatalog;
 use devo_core::ProviderWireApi;
+use devo_core::ReasoningEffort;
 use devo_core::SessionId;
 use devo_core::TurnId;
 use devo_core::TurnStatus;
@@ -53,6 +54,7 @@ struct EnsureSessionOutcome {
     session_id: SessionId,
     model: Option<String>,
     thinking: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Immutable runtime configuration used to construct the background server client worker.
@@ -589,6 +591,7 @@ async fn run_worker_inner(
                             cwd: session_cwd.clone(),
                             model: model.clone(),
                             thinking: thinking_selection.clone(),
+                            reasoning_effort: None,
                         });
                     }
                     Some(OperationCommand::SwitchSession(next_session_id)) => {
@@ -609,6 +612,7 @@ async fn run_worker_inner(
                                     title: result.session.title,
                                     model: result.session.model.clone(),
                                     thinking: result.session.thinking.clone(),
+                                    reasoning_effort: result.session.reasoning_effort,
                                     total_input_tokens: result.session.total_input_tokens,
                                     total_output_tokens: result.session.total_output_tokens,
                                     prompt_token_estimate: result.session.prompt_token_estimate,
@@ -800,6 +804,7 @@ async fn run_worker_inner(
                                     let _ = event_tx.send(WorkerEvent::TurnStarted {
                                         model: payload.turn.model,
                                         thinking: payload.turn.thinking,
+                                        reasoning_effort: payload.turn.reasoning_effort,
                                         turn_id: payload.turn.turn_id,
                                     });
                                 }
@@ -982,6 +987,7 @@ async fn ensure_session_started(
             session_id: *session_id,
             model: Some(model.to_string()),
             thinking: None,
+            reasoning_effort: None,
         });
     }
 
@@ -998,6 +1004,7 @@ async fn ensure_session_started(
         session_id: session.session.session_id,
         model: session.session.model,
         thinking: session.session.thinking,
+        reasoning_effort: session.session.reasoning_effort,
     })
 }
 
@@ -1223,18 +1230,17 @@ fn summarize_tool_call(payload: &ToolCallPayload) -> String {
     if detail.is_empty() {
         payload.tool_name.clone()
     } else {
-        format!("{}: {detail}", payload.tool_name)
+        format!("{} {detail}", payload.tool_name)
     }
 }
 
 fn make_path_relative(path: &str) -> String {
     let p = std::path::PathBuf::from(path);
-    if p.is_absolute() {
-        if let Ok(cwd) = std::env::current_dir() {
-            if let Ok(rel) = p.strip_prefix(&cwd) {
-                return rel.to_string_lossy().to_string();
-            }
-        }
+    if p.is_absolute()
+        && let Ok(cwd) = std::env::current_dir()
+        && let Ok(rel) = p.strip_prefix(&cwd)
+    {
+        return rel.to_string_lossy().to_string();
     }
     path.to_string()
 }
@@ -1270,7 +1276,7 @@ fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
             .get("path")
             .and_then(serde_json::Value::as_str)
             .or_else(|| input.get("filePath").and_then(serde_json::Value::as_str))
-            .map(|path| make_path_relative(path)),
+            .map(make_path_relative),
         "webfetch" | "websearch" => input
             .get("url")
             .and_then(serde_json::Value::as_str)
@@ -1494,7 +1500,7 @@ mod tests {
 
         assert_eq!(
             summarize_tool_call(&payload),
-            "bash: Get-Date -Format \"yyyy-MM-dd\""
+            "bash Get-Date -Format \"yyyy-MM-dd\""
         );
     }
 
@@ -1524,6 +1530,7 @@ mod tests {
             ephemeral: false,
             model: Some("test-model".to_string()),
             thinking: None,
+            reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
             prompt_token_estimate: 0,
@@ -1555,6 +1562,7 @@ mod tests {
             ephemeral: false,
             model: Some("test-model".to_string()),
             thinking: None,
+            reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
             prompt_token_estimate: 0,

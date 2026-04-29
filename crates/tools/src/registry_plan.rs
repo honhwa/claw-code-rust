@@ -140,7 +140,7 @@ fn bash_description() -> String {
         )
         .replace("${os}", std::env::consts::OS)
         .replace("${shell}", shell)
-        .replace("${chaining}", &chaining)
+        .replace("${chaining}", chaining)
         .replace("${maxBytes}", "64 KB")
 }
 

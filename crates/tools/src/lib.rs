@@ -157,8 +157,10 @@ mod tests {
 
     #[test]
     fn registry_from_plan_uses_shell_command_when_configured() {
-        let mut config = ToolPlanConfig::default();
-        config.use_shell_command = true;
+        let config = ToolPlanConfig {
+            use_shell_command: true,
+            ..ToolPlanConfig::default()
+        };
         let registry = handlers::build_registry_from_plan(&config);
 
         // When use_shell_command = true, bash is replaced by shell_command

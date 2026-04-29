@@ -1407,7 +1407,7 @@ impl ChatComposer {
                     // let the default submission handle it so the arguments
                     // are preserved.
                     let text = self.textarea.text();
-                    if !cmd.supports_inline_args() || text.trim().split_whitespace().count() < 2 {
+                    if !cmd.supports_inline_args() || text.split_whitespace().count() < 2 {
                         self.textarea.set_text_clearing_elements("");
                         return (InputResult::Command(cmd), true);
                     }

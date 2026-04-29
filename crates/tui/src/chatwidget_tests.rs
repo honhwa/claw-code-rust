@@ -560,6 +560,7 @@ fn session_switch_restores_header_and_double_blank_line_before_user_input() {
         title: Some("Resumed".to_string()),
         model: Some("resumed-model".to_string()),
         thinking: None,
+        reasoning_effort: None,
         total_input_tokens: 3,
         total_output_tokens: 5,
         prompt_token_estimate: 3,
@@ -584,15 +585,14 @@ fn session_switch_restores_header_and_double_blank_line_before_user_input() {
         .flat_map(|line| line.line.spans.iter())
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    let blank_line_indexes = committed_lines
+    let committed_rows = committed_lines
         .iter()
-        .enumerate()
-        .filter_map(|(index, line)| {
+        .map(|line| {
             line.line
                 .spans
                 .iter()
-                .all(|span| span.content.trim().is_empty())
-                .then_some(index)
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
         })
         .collect::<Vec<_>>();
 
@@ -601,7 +601,11 @@ fn session_switch_restores_header_and_double_blank_line_before_user_input() {
     assert!(committed_text.contains("world"));
     assert!(!committed_text.contains("session 1 lingering line"));
     assert!(
-        blank_line_indexes.windows(2).any(|window| window == [6, 8]),
+        committed_rows
+            .windows(3)
+            .any(|window| window[0].trim_end() == "┃"
+                && window[1].contains("hello")
+                && window[2].trim_end() == "┃"),
         "expected blank line spacing with colored bar before restored user input: {committed_lines:?}"
     );
 }
@@ -647,6 +651,7 @@ fn active_response_renders_generating_status_without_devo_title() {
     widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
         model: "test-model".to_string(),
         thinking: None,
+        reasoning_effort: None,
         turn_id: Default::default(),
     });
     widget.handle_worker_event(crate::events::WorkerEvent::TextDelta("hello".to_string()));
@@ -668,6 +673,7 @@ fn streaming_pending_ai_reply_respects_wrap_limit_before_finalize() {
     widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
         model: "test-model".to_string(),
         thinking: None,
+        reasoning_effort: None,
         turn_id: Default::default(),
     });
     widget.handle_worker_event(crate::events::WorkerEvent::TextDelta(
@@ -695,6 +701,7 @@ fn active_assistant_markdown_does_not_double_wrap() {
     widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
         model: "test-model".to_string(),
         thinking: None,
+        reasoning_effort: None,
         turn_id: Default::default(),
     });
     widget.handle_worker_event(crate::events::WorkerEvent::TextDelta(body));
@@ -720,6 +727,7 @@ fn committed_assistant_markdown_does_not_double_wrap() {
     widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
         model: "test-model".to_string(),
         thinking: None,
+        reasoning_effort: None,
         turn_id: Default::default(),
     });
     widget.handle_worker_event(crate::events::WorkerEvent::TextDelta(body));
@@ -762,6 +770,7 @@ fn reasoning_text_commits_to_history_when_turn_finishes() {
     widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
         model: "test-model".to_string(),
         thinking: None,
+        reasoning_effort: None,
         turn_id: Default::default(),
     });
     widget.handle_worker_event(crate::events::WorkerEvent::ReasoningDelta(
@@ -802,6 +811,7 @@ fn restored_reasoning_text_is_visible_in_transcript() {
         title: None,
         model: Some("test-model".to_string()),
         thinking: None,
+        reasoning_effort: None,
         total_input_tokens: 0,
         total_output_tokens: 0,
         prompt_token_estimate: 0,
@@ -830,6 +840,7 @@ fn reasoning_and_assistant_stream_in_separate_cells() {
     widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
         model: "test-model".to_string(),
         thinking: None,
+        reasoning_effort: None,
         turn_id: Default::default(),
     });
     widget.handle_worker_event(crate::events::WorkerEvent::ReasoningDelta(
@@ -948,6 +959,7 @@ fn session_switch_updates_session_identity_projection() {
         title: Some("Resumed".to_string()),
         model: Some("resumed-model".to_string()),
         thinking: None,
+        reasoning_effort: None,
         total_input_tokens: 3,
         total_output_tokens: 5,
         prompt_token_estimate: 3,
@@ -982,6 +994,7 @@ fn new_session_prepared_resets_session_identity_projection() {
         title: None,
         model: Some("resumed-model".to_string()),
         thinking: None,
+        reasoning_effort: None,
         total_input_tokens: 3,
         total_output_tokens: 5,
         prompt_token_estimate: 3,
@@ -992,6 +1005,7 @@ fn new_session_prepared_resets_session_identity_projection() {
         cwd: initial_cwd.clone(),
         model: "new-session-model".to_string(),
         thinking: None,
+        reasoning_effort: None,
     });
 
     assert_eq!(widget.current_cwd(), initial_cwd.as_path());

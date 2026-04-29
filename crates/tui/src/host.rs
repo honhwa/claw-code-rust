@@ -94,6 +94,10 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
 
     let model = resolve_initial_model(&initial_session, &config.model_catalog);
     let cwd = initial_session.cwd.clone();
+    let initial_provider = model.provider_wire_api();
+    let initial_reasoning_effort = model
+        .resolve_thinking_selection(initial_session.thinking_selection.as_deref())
+        .effective_reasoning_effort;
 
     let mut loop_state = InteractiveLoopState::default();
 
@@ -101,7 +105,12 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
     let mut chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
         frame_requester: tui.frame_requester(),
         app_event_tx: app_event_sender,
-        initial_session: TuiSessionState::new(cwd.clone(), Some(model)),
+        initial_session: TuiSessionState {
+            cwd: cwd.clone(),
+            model: Some(model),
+            provider: Some(initial_provider),
+            reasoning_effort: initial_reasoning_effort,
+        },
         initial_thinking_selection: initial_session.thinking_selection.clone(),
         initial_user_message: None,
         enhanced_keys_supported: tui.enhanced_keys_supported(),

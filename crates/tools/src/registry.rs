@@ -34,11 +34,11 @@ impl ToolRegistry {
 
     pub fn is_read_only(&self, name: &str) -> bool {
         self.spec(name)
-            .map_or(false, |s| s.execution_mode == ToolExecutionMode::ReadOnly)
+            .is_some_and(|s| s.execution_mode == ToolExecutionMode::ReadOnly)
     }
 
     pub fn supports_parallel(&self, name: &str) -> bool {
-        self.spec(name).map_or(false, |s| s.supports_parallel)
+        self.spec(name).is_some_and(|s| s.supports_parallel)
     }
 
     pub async fn dispatch(
@@ -79,6 +79,12 @@ impl ToolRegistry {
 
     pub fn len(&self) -> usize {
         self.handlers.len()
+    }
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

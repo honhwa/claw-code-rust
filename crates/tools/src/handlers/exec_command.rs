@@ -171,10 +171,10 @@ fn format_exec_response(output: &ProcessOutput, session_id: Option<i32>) -> Stri
     if let Some(code) = output.exit_code {
         parts.push(format!("Process exited with code {code}"));
     }
-    if let Some(sid) = session_id {
-        if output.exit_code.is_none() {
-            parts.push(format!("Process running with session ID {sid}"));
-        }
+    if let Some(sid) = session_id
+        && output.exit_code.is_none()
+    {
+        parts.push(format!("Process running with session ID {sid}"));
     }
 
     if output.truncated {

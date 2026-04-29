@@ -28,6 +28,16 @@ pub(crate) struct ShellExecRequest {
     pub max_output_tokens: usize,
 }
 
+struct PtyRunConfig {
+    shell: ShellSpec,
+    command_to_run: String,
+    workdir: PathBuf,
+    description: String,
+    timeout_ms: u64,
+    yield_time_ms: u64,
+    max_output_tokens: usize,
+}
+
 pub(crate) fn default_timeout_ms() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
@@ -111,13 +121,15 @@ pub(crate) async fn execute_shell_command(
 
     if tty {
         return run_with_pty(
-            shell,
-            command_to_run,
-            workdir,
-            description,
-            timeout_ms,
-            yield_time_ms,
-            max_output_tokens,
+            PtyRunConfig {
+                shell,
+                command_to_run,
+                workdir,
+                description,
+                timeout_ms,
+                yield_time_ms,
+                max_output_tokens,
+            },
             progress,
         )
         .await;
@@ -289,15 +301,18 @@ fn platform_shell(login: bool) -> ShellSpec {
 }
 
 async fn run_with_pty(
-    shell: ShellSpec,
-    command_to_run: String,
-    workdir: PathBuf,
-    description: String,
-    timeout_ms: u64,
-    yield_time_ms: u64,
-    max_output_tokens: usize,
+    config: PtyRunConfig,
     progress: Option<ToolProgressSender>,
 ) -> anyhow::Result<ToolOutput> {
+    let PtyRunConfig {
+        shell,
+        command_to_run,
+        workdir,
+        description,
+        timeout_ms,
+        yield_time_ms,
+        max_output_tokens,
+    } = config;
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -427,11 +442,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_shell_command_non_tty_sends_progress() {
-        let cmd = if cfg!(windows) {
-            "echo stream_test"
-        } else {
-            "echo stream_test"
-        };
+        let cmd = "echo stream_test";
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
         let result = execute_shell_command(
@@ -459,11 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_shell_command_progress_none_does_not_crash() {
-        let cmd = if cfg!(windows) {
-            "echo test"
-        } else {
-            "echo test"
-        };
+        let cmd = "echo test";
         let result = execute_shell_command(
             ShellExecRequest {
                 command: cmd.to_string(),

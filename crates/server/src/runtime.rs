@@ -363,6 +363,7 @@ impl ServerRuntime {
             ephemeral: params.ephemeral,
             model: Some(model.clone()),
             thinking: None,
+            reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
             prompt_token_estimate: 0,
@@ -670,6 +671,7 @@ impl ServerRuntime {
             ephemeral: source.summary.ephemeral,
             model: Some(fork_model.clone()),
             thinking: source.summary.thinking.clone(),
+            reasoning_effort: source.summary.reasoning_effort,
             total_input_tokens: source_core_session.total_input_tokens,
             total_output_tokens: source_core_session.total_output_tokens,
             prompt_token_estimate: source_core_session.prompt_token_estimate,
@@ -1207,12 +1209,12 @@ impl ServerRuntime {
         let now = Utc::now();
         let turn = {
             let mut session = session_arc.lock().await;
-            if session.active_turn.is_some() {
+            if let Some(active_turn) = session.active_turn.as_ref() {
                 // Queue instead of rejecting — push directly to the steering_queue
                 // (independent lock) so we don't block on core_session which is
                 // held by the running query() loop.
                 let steering_queue = Arc::clone(&session.steering_queue);
-                let active_turn_id = session.active_turn.as_ref().expect("active turn").turn_id;
+                let active_turn_id = active_turn.turn_id;
                 drop(session);
 
                 {
@@ -1243,7 +1245,7 @@ impl ServerRuntime {
                     let _ = tx.send(response);
                 }
                 let sid = params.session_id;
-                let runtime = Arc::clone(&self);
+                let runtime = Arc::clone(self);
                 tokio::spawn(async move {
                     runtime.broadcast_updated_queue(sid).await;
                 });
@@ -1279,6 +1281,7 @@ impl ServerRuntime {
                 kind: devo_core::TurnKind::Regular,
                 model: turn_config.model.slug.clone(),
                 thinking: turn_config.thinking_selection.clone(),
+                reasoning_effort: resolved_request.effective_reasoning_effort,
                 request_model: resolved_request.request_model,
                 request_thinking: resolved_request.request_thinking,
                 started_at: now,
@@ -2238,6 +2241,7 @@ impl ServerRuntime {
             kind: devo_core::TurnKind::Regular,
             model: turn_config.model.slug.clone(),
             thinking: turn_config.thinking_selection.clone(),
+            reasoning_effort: resolved_request.effective_reasoning_effort,
             request_model: resolved_request.request_model.clone(),
             request_thinking: resolved_request.request_thinking.clone(),
             started_at: now,
@@ -2334,6 +2338,7 @@ impl ServerRuntime {
             kind: devo_core::TurnKind::Regular,
             model: turn_config.model.slug.clone(),
             thinking: turn_config.thinking_selection.clone(),
+            reasoning_effort: resolved_request.effective_reasoning_effort,
             request_model: resolved_request.request_model.clone(),
             request_thinking: resolved_request.request_thinking.clone(),
             started_at: now,

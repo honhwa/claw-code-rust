@@ -3,6 +3,7 @@ use std::time::Instant;
 use crate::app_command::InputHistoryDirection;
 use devo_core::SessionId;
 use devo_protocol::ProviderWireApi;
+use devo_protocol::ReasoningEffort;
 const TOOL_RESULT_FOLD_FINAL_STAGE: u8 = 3;
 
 /// One persisted session entry shown in the interactive session picker panel.
@@ -42,6 +43,8 @@ pub(crate) enum WorkerEvent {
         model: String,
         /// The logical thinking selection used for this turn.
         thinking: Option<String>,
+        /// The effective reasoning effort observed for this turn.
+        reasoning_effort: Option<ReasoningEffort>,
         /// The server-assigned turn identifier.
         turn_id: TurnId,
     },
@@ -150,6 +153,8 @@ pub(crate) enum WorkerEvent {
         model: String,
         /// Thinking selection currently configured for the next newly-created session.
         thinking: Option<String>,
+        /// Effective reasoning effort currently configured for the next session.
+        reasoning_effort: Option<ReasoningEffort>,
     },
     /// The active session changed.
     SessionSwitched {
@@ -163,6 +168,8 @@ pub(crate) enum WorkerEvent {
         model: Option<String>,
         /// The thinking selection restored from the resumed session, when one exists.
         thinking: Option<String>,
+        /// The effective reasoning effort restored from session context, when one exists.
+        reasoning_effort: Option<ReasoningEffort>,
         /// Total input tokens accumulated for the resumed session.
         total_input_tokens: usize,
         /// Total output tokens accumulated for the resumed session.

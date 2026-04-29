@@ -290,6 +290,14 @@ impl HistoryCell for UserHistoryCell {
 
         let style = user_message_style();
         let element_style = style.fg(Color::Cyan);
+        let prefix_style = Style::default().fg(Color::Cyan);
+        let blank_prefixed_line = || {
+            Line::from(vec![
+                Span::styled("┃ ", prefix_style),
+                Span::styled(String::new(), style),
+            ])
+            .style(style)
+        };
 
         let wrapped_message = if self.message.is_empty() && self.text_elements.is_empty() {
             None
@@ -320,13 +328,13 @@ impl HistoryCell for UserHistoryCell {
             (!wrapped.is_empty()).then_some(wrapped)
         };
 
-        let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+        let mut lines: Vec<Line<'static>> = vec![blank_prefixed_line()];
 
         if let Some(wrapped_message) = wrapped_message {
             lines.extend(prefix_lines(wrapped_message, "┃ ".cyan(), "┃ ".cyan()));
         }
 
-        lines.push(Line::from(""));
+        lines.push(blank_prefixed_line());
         lines
     }
 }

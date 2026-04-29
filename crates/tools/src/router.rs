@@ -7,6 +7,11 @@ use tracing::{info, warn};
 use crate::invocation::{ToolCallId, ToolContent, ToolInvocation, ToolName};
 use crate::registry::ToolRegistry;
 
+type ProgressCallback = dyn Fn(&str, &str) + Send + Sync;
+type ProgressCallbackArc = Arc<ProgressCallback>;
+type PermissionFuture = futures::future::BoxFuture<'static, Result<(), String>>;
+type PermissionCheckFn = dyn Fn(&str) -> PermissionFuture + Send + Sync;
+
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     pub id: String,
@@ -78,11 +83,10 @@ impl ToolRuntime {
     async fn execute_batch_inner(
         &self,
         calls: &[ToolCall],
-        on_progress: Option<Box<dyn Fn(&str, &str) + Send + Sync>>,
+        on_progress: Option<Box<ProgressCallback>>,
     ) -> Vec<ToolCallResult> {
         // Wrap the Box in an Arc so it can be shared across spawned tasks
-        let on_progress: Option<Arc<dyn Fn(&str, &str) + Send + Sync>> =
-            on_progress.map(|f| Arc::from(f));
+        let on_progress: Option<ProgressCallbackArc> = on_progress.map(Arc::from);
 
         let mut results = Vec::with_capacity(calls.len());
 
@@ -112,7 +116,7 @@ impl ToolRuntime {
     pub(crate) async fn execute_single(
         &self,
         call: &ToolCall,
-        on_progress: &Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
+        on_progress: &Option<ProgressCallbackArc>,
     ) -> ToolCallResult {
         let tool = match self.registry.get(&call.name) {
             Some(t) => t.clone(),
@@ -173,17 +177,13 @@ impl ToolRuntime {
 
 #[derive(Clone)]
 pub struct PermissionChecker {
-    inner:
-        Arc<dyn Fn(&str) -> futures::future::BoxFuture<'static, Result<(), String>> + Send + Sync>,
+    inner: Arc<PermissionCheckFn>,
 }
 
 impl PermissionChecker {
     pub fn new<F>(check: F) -> Self
     where
-        F: Fn(&str) -> futures::future::BoxFuture<'static, Result<(), String>>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&str) -> PermissionFuture + Send + Sync + 'static,
     {
         PermissionChecker {
             inner: Arc::new(check),
@@ -489,7 +489,7 @@ mod tests {
 
         let collected = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let collected_clone = Arc::clone(&collected);
-        let cb: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(move |_, chunk| {
+        let cb: ProgressCallbackArc = Arc::new(move |_, chunk| {
             let c = collected_clone.clone();
             let chunk = chunk.to_string();
             tokio::spawn(async move {

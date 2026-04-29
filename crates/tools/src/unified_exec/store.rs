@@ -78,6 +78,10 @@ impl ProcessStore {
         self.processes.read().await.len()
     }
 
+    pub async fn is_empty(&self) -> bool {
+        self.processes.read().await.is_empty()
+    }
+
     pub async fn prune_exited(&self) {
         let mut map = self.processes.write().await;
         self.prune_locked(&mut map);
@@ -110,18 +114,8 @@ mod tests {
     use std::path::Path;
 
     fn spawn_echo() -> UnifiedExecProcess {
-        let (proc, _rx) = UnifiedExecProcess::spawn(
-            1,
-            if cfg!(windows) {
-                "echo test"
-            } else {
-                "echo test"
-            },
-            Path::new("."),
-            None,
-            false,
-        )
-        .expect("spawn should succeed");
+        let (proc, _rx) = UnifiedExecProcess::spawn(1, "echo test", Path::new("."), None, false)
+            .expect("spawn should succeed");
         proc
     }
 

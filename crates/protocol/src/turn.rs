@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{ItemId, SessionId, TurnId, TurnStatus, TurnUsage};
+use crate::{ItemId, ReasoningEffort, SessionId, TurnId, TurnStatus, TurnUsage};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnMetadata {
     pub turn_id: TurnId,
@@ -14,6 +14,7 @@ pub struct TurnMetadata {
     pub kind: TurnKind,
     pub model: String,
     pub thinking: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub request_model: String,
     pub request_thinking: Option<String>,
     pub started_at: DateTime<Utc>,
@@ -73,19 +74,14 @@ pub struct TurnSteerResult {
     pub turn_id: TurnId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnKind {
+    #[default]
     Regular,
     Review,
     ManualCompaction,
     Other(String),
-}
-
-impl Default for TurnKind {
-    fn default() -> Self {
-        Self::Regular
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +130,7 @@ mod tests {
             kind: TurnKind::Regular,
             model: "logical-model".to_string(),
             thinking: Some("high".to_string()),
+            reasoning_effort: Some(ReasoningEffort::High),
             request_model: "provider-model".to_string(),
             request_thinking: Some("medium".to_string()),
             started_at: Utc::now(),

@@ -175,6 +175,16 @@ impl SessionProjector for DefaultProjection {
             ephemeral,
             model: session.model.clone(),
             thinking: session.thinking.clone(),
+            reasoning_effort: session
+                .latest_turn_context
+                .as_ref()
+                .and_then(|context| context.reasoning_effort)
+                .or_else(|| {
+                    session
+                        .session_context
+                        .as_ref()
+                        .and_then(|context| context.reasoning_effort)
+                }),
             total_input_tokens: 0,
             total_output_tokens: 0,
             prompt_token_estimate: 0,
@@ -193,6 +203,15 @@ impl TurnProjector for DefaultProjection {
             kind: turn.kind.clone(),
             model: turn.model.clone(),
             thinking: turn.thinking.clone(),
+            reasoning_effort: turn
+                .turn_context
+                .as_ref()
+                .and_then(|context| context.reasoning_effort)
+                .or_else(|| {
+                    turn.session_context
+                        .as_ref()
+                        .and_then(|context| context.reasoning_effort)
+                }),
             request_model: turn.request_model.clone(),
             request_thinking: turn.request_thinking.clone(),
             started_at: turn.started_at,
