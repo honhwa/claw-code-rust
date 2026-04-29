@@ -334,7 +334,12 @@ mod tests {
             assert!(proc.is_running());
 
             proc.terminate();
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            // Poll up to 5s for termination (CI can be slow).
+            let mut waited = 0u64;
+            while proc.is_running() && waited < 5000 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                waited += 100;
+            }
 
             assert!(!proc.is_running(), "process should have been terminated");
         }
