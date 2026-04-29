@@ -777,6 +777,27 @@ async fn run_worker_inner(
                                     let _ = event_tx.send(WorkerEvent::TextDelta(payload.delta));
                                 }
                             }
+                            "item/commandExecution/outputDelta" => {
+                                if let ServerEvent::ItemDelta { payload, .. } = event {
+                                    let delta_str = &payload.delta;
+                                    if let Ok(val) =
+                                        serde_json::from_str::<serde_json::Value>(delta_str)
+                                    {
+                                        let tool_use_id = val
+                                            .get("tool_use_id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let text =
+                                            val.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                                        if !tool_use_id.is_empty() {
+                                            let _ = event_tx.send(WorkerEvent::ToolOutputDelta {
+                                                tool_use_id: tool_use_id.to_string(),
+                                                delta: text.to_string(),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
                             "item/reasoning/textDelta" | "item/reasoning/summaryTextDelta" => {
                                 if let ServerEvent::ItemDelta { payload, .. } = event {
                                     let _ = event_tx.send(WorkerEvent::ReasoningDelta(payload.delta));

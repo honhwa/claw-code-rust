@@ -705,6 +705,24 @@ impl ChatWidget {
                 self.frame_requester.schedule_frame();
                 self.set_status_message("Tool started");
             }
+            WorkerEvent::ToolOutputDelta { tool_use_id, delta } => {
+                // Append streaming output to the active tool call lines
+                if let Some(tool_call) = self.active_tool_calls.get_mut(&tool_use_id) {
+                    let line = Line::from(delta.clone()).patch_style(Self::tool_text_style());
+                    tool_call.lines.push(line);
+                    // Also update the pending viewport entry
+                    if let Some(pending) = self
+                        .pending_tool_calls
+                        .iter_mut()
+                        .find(|tc| tc.tool_use_id == tool_use_id)
+                    {
+                        pending
+                            .lines
+                            .push(Line::from(delta).patch_style(Self::tool_text_style()));
+                    }
+                    self.frame_requester.schedule_frame();
+                }
+            }
             WorkerEvent::ToolResult {
                 tool_use_id,
                 title,

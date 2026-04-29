@@ -1816,7 +1816,7 @@ impl ServerRuntime {
                             .await;
                     }
                     QueryEvent::ToolProgress {
-                        tool_use_id: _,
+                        tool_use_id,
                         content,
                     } => {
                         let _ = runtime
@@ -1829,7 +1829,11 @@ impl ServerRuntime {
                                         item_id: None,
                                         seq: 0,
                                     },
-                                    delta: content,
+                                    delta: serde_json::json!({
+                                        "tool_use_id": tool_use_id,
+                                        "text": content,
+                                    })
+                                    .to_string(),
                                     stream_index: None,
                                     channel: None,
                                 },
