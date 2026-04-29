@@ -692,9 +692,13 @@ impl ChatWidget {
             } => {
                 // Do not commit active streams here — pending tool calls share the
                 // active viewport alongside reasoning/assistant text.
-                let message = detail
-                    .map(|detail| format!("{summary}\n{detail}"))
-                    .unwrap_or(summary);
+                // If summary already has a key detail (e.g. "read: src/main.rs"),
+                // skip the redundant JSON preview.
+                let message = if summary.contains(": ") {
+                    summary
+                } else {
+                    detail.unwrap_or_else(|| summary.clone())
+                };
                 let tool_call = ActiveToolCall {
                     tool_use_id: tool_use_id.clone(),
                     lines: vec![Line::from(message).patch_style(Self::tool_text_style())],

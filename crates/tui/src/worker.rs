@@ -1165,29 +1165,65 @@ fn summarize_tool_call(payload: &ToolCallPayload) -> String {
     }
 }
 
+fn make_path_relative(path: &str) -> String {
+    let p = std::path::PathBuf::from(path);
+    if p.is_absolute() {
+        if let Ok(cwd) = std::env::current_dir() {
+            if let Ok(rel) = p.strip_prefix(&cwd) {
+                return rel.to_string_lossy().to_string();
+            }
+        }
+    }
+    path.to_string()
+}
+
+fn fmt_offset_limit(input: &serde_json::Value) -> String {
+    let offset = input.get("offset").and_then(|v| v.as_u64());
+    let limit = input.get("limit").and_then(|v| v.as_u64());
+    match (offset, limit) {
+        (Some(o), Some(l)) => format!(" (offset:{o}, limit:{l})"),
+        (Some(o), None) => format!(" (offset:{o})"),
+        (None, Some(l)) => format!(" (limit:{l})"),
+        (None, None) => String::new(),
+    }
+}
+
 fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
     let candidate = match tool_name {
         "bash" => input
             .get("command")
             .and_then(serde_json::Value::as_str)
-            .or_else(|| input.get("cmd").and_then(serde_json::Value::as_str)),
+            .or_else(|| input.get("cmd").and_then(serde_json::Value::as_str))
+            .map(|s| s.to_string()),
         "read" => input
             .get("filePath")
             .and_then(serde_json::Value::as_str)
-            .or_else(|| input.get("path").and_then(serde_json::Value::as_str)),
+            .or_else(|| input.get("path").and_then(serde_json::Value::as_str))
+            .map(|path| {
+                let rel = make_path_relative(path);
+                let ext = fmt_offset_limit(input);
+                format!("{rel}{ext}")
+            }),
         "write" | "edit" | "apply_patch" => input
             .get("path")
             .and_then(serde_json::Value::as_str)
-            .or_else(|| input.get("filePath").and_then(serde_json::Value::as_str)),
+            .or_else(|| input.get("filePath").and_then(serde_json::Value::as_str))
+            .map(|path| make_path_relative(path)),
         "webfetch" | "websearch" => input
             .get("url")
             .and_then(serde_json::Value::as_str)
-            .or_else(|| input.get("query").and_then(serde_json::Value::as_str)),
+            .map(|s| s.to_string())
+            .or_else(|| {
+                input
+                    .get("query")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|s| s.to_string())
+            }),
         _ => None,
     };
 
     candidate
-        .map(|text| compact_tool_summary(text, 96))
+        .map(|text| compact_tool_summary(&text, 96))
         .unwrap_or_else(|| compact_tool_summary(&render_json_preview(input), 96))
 }
 

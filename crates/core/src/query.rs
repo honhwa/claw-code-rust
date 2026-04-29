@@ -785,7 +785,9 @@ pub async fn query(
                 let compacted_content = micro_compact(content_str);
                 let summary = tool_call_map
                     .get(r.tool_use_id.as_str())
-                    .map(|(name, input)| devo_tools::tool_summary::tool_summary(name, input))
+                    .map(|(name, input)| {
+                        devo_tools::tool_summary::tool_summary(name, input, &session.cwd)
+                    })
                     .unwrap_or_default();
                 emit(QueryEvent::ToolResult {
                     tool_use_id: r.tool_use_id.clone(),
