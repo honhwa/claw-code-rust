@@ -88,6 +88,7 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         ("clear", SlashCommand::Clear),
         ("onboard", SlashCommand::Onboard),
         ("diff", SlashCommand::Diff),
+        ("btw", SlashCommand::Btw),
         ("exit", SlashCommand::Exit),
     ]
 }

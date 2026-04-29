@@ -2114,7 +2114,6 @@ impl ServerRuntime {
         .await;
 
         // After the turn completes, check for queued inputs and start the next turn.
-        // Drop all local state before the recursive spawn so the closure is Send.
         let input_text = {
             let session_arc = match self.sessions.lock().await.get(&session_id).cloned() {
                 Some(s) => s,
@@ -2134,14 +2133,13 @@ impl ServerRuntime {
                 Some(devo_core::PendingInputItem {
                     kind: devo_core::PendingInputKind::UserText { text },
                     ..
-                }) => {
-                    queue.clear();
-                    text
-                }
+                }) => text,
                 _ => return,
             }
         };
         let display_input = input_text.clone();
+        // Broadcast remaining queue state so the TUI preview stays in sync.
+        self.broadcast_updated_queue(session_id).await;
 
         let (turn_config, resolved_request) = {
             let session_arc = match self.sessions.lock().await.get(&session_id).cloned() {
@@ -2207,6 +2205,38 @@ impl ServerRuntime {
             turn_config,
             display_input,
             input_text,
+        ))
+        .await;
+    }
+
+    /// Read the current steering queue and broadcast its state to connected clients.
+    /// Called after any queue mutation (enqueue, dequeue, clear) so the TUI preview
+    /// stays in sync.
+    async fn broadcast_updated_queue(&self, session_id: SessionId) {
+        let Some(session_arc) = self.sessions.lock().await.get(&session_id).cloned() else {
+            return;
+        };
+        let (pending_count, pending_texts) = {
+            let session = session_arc.lock().await;
+            let queue = session
+                .steering_queue
+                .lock()
+                .expect("steering queue mutex should not be poisoned");
+            let texts: Vec<String> = queue
+                .iter()
+                .filter_map(|item| match &item.kind {
+                    devo_core::PendingInputKind::UserText { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            (texts.len(), texts)
+        };
+        self.broadcast_event(ServerEvent::InputQueueUpdated(
+            devo_core::InputQueueUpdatedPayload {
+                session_id,
+                pending_count,
+                pending_texts,
+            },
         ))
         .await;
     }
