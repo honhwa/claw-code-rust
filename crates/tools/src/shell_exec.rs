@@ -146,6 +146,9 @@ pub(crate) async fn execute_shell_command(
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             let result_text = merge_streams(&stdout, &stderr);
+            if let Some(ref sender) = progress {
+                let _ = sender.send(result_text.clone());
+            }
             let result_text = truncate_output(&result_text, max_output_tokens);
             if output.status.success() {
                 Ok(ToolOutput {
@@ -420,6 +423,65 @@ async fn run_with_pty(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn execute_shell_command_non_tty_sends_progress() {
+        let cmd = if cfg!(windows) {
+            "echo stream_test"
+        } else {
+            "echo stream_test"
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        let result = execute_shell_command(
+            ShellExecRequest {
+                command: cmd.to_string(),
+                workdir: std::env::current_dir().unwrap_or_default(),
+                description: "test".into(),
+                shell_override: None,
+                tty: false,
+                login: false,
+                timeout_ms: 5000,
+                yield_time_ms: 100,
+                max_output_tokens: 100,
+            },
+            Some(tx),
+        )
+        .await;
+
+        assert!(result.is_ok(), "command should succeed: {:?}", result.err());
+        // Progress channel should have received output
+        if let Ok(chunk) = rx.try_recv() {
+            assert!(!chunk.is_empty(), "progress chunk should not be empty");
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_shell_command_progress_none_does_not_crash() {
+        let cmd = if cfg!(windows) {
+            "echo test"
+        } else {
+            "echo test"
+        };
+        let result = execute_shell_command(
+            ShellExecRequest {
+                command: cmd.to_string(),
+                workdir: std::env::current_dir().unwrap_or_default(),
+                description: "test".into(),
+                shell_override: None,
+                tty: false,
+                login: false,
+                timeout_ms: 5000,
+                yield_time_ms: 100,
+                max_output_tokens: 100,
+            },
+            None,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
     use super::{merge_streams, platform_shell_program, preview, resolve_shell, truncate_output};
 
     #[test]

@@ -428,4 +428,141 @@ mod tests {
         assert!(!result.is_error);
         assert_eq!(result.tool_use_id, "c1");
     }
+
+    // --- Streaming tests ---
+
+    struct StreamingHandler {
+        chunks: Vec<String>,
+    }
+
+    #[async_trait]
+    impl ToolHandler for StreamingHandler {
+        fn tool_kind(&self) -> ToolHandlerKind {
+            ToolHandlerKind::Write
+        }
+
+        async fn handle(
+            &self,
+            _invocation: ToolInvocation,
+            progress: Option<ToolProgressSender>,
+        ) -> Result<Box<dyn ToolOutput>, ToolExecutionError> {
+            // Send chunks through progress, then return
+            if let Some(sender) = progress {
+                for chunk in &self.chunks {
+                    let _ = sender.send(chunk.clone());
+                    tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                }
+            }
+            Ok(Box::new(FunctionToolOutput::success(self.chunks.join(""))))
+        }
+    }
+
+    fn make_streaming_registry() -> Arc<ToolRegistry> {
+        let mut builder = ToolRegistryBuilder::new();
+        builder.register_handler(
+            "stream_tool",
+            Arc::new(StreamingHandler {
+                chunks: vec!["hello ".into(), "world".into()],
+            }),
+        );
+        builder.push_spec(ToolSpec {
+            name: "stream_tool".into(),
+            description: String::new(),
+            input_schema: JsonSchema::object(Default::default(), None, None),
+            output_mode: ToolOutputMode::Text,
+            execution_mode: ToolExecutionMode::Mutating,
+            capability_tags: vec![],
+            supports_parallel: false,
+        });
+        Arc::new(builder.build())
+    }
+
+    #[tokio::test]
+    async fn execute_single_receives_progress() {
+        let registry = make_streaming_registry();
+        let runtime = ToolRuntime::new_without_permissions(registry);
+        let call = ToolCall {
+            id: "s1".into(),
+            name: "stream_tool".into(),
+            input: serde_json::json!({}),
+        };
+
+        let collected = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let collected_clone = Arc::clone(&collected);
+        let cb: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(move |_, chunk| {
+            let c = collected_clone.clone();
+            let chunk = chunk.to_string();
+            tokio::spawn(async move {
+                c.lock().await.push(chunk);
+            });
+        });
+
+        let result = runtime.execute_single(&call, &Some(cb.clone())).await;
+        assert!(!result.is_error);
+        assert_eq!(result.content.into_string(), "hello world");
+
+        // Give the spawned tasks time to process
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        let final_chunks = collected.lock().await;
+        assert_eq!(final_chunks.len(), 2, "should have received 2 chunks");
+        assert!(final_chunks.iter().any(|c| c == "hello "));
+        assert!(final_chunks.iter().any(|c| c == "world"));
+    }
+
+    #[tokio::test]
+    async fn execute_batch_streaming_receives_progress() {
+        let registry = make_streaming_registry();
+        let runtime = ToolRuntime::new_without_permissions(registry);
+        let call = ToolCall {
+            id: "s1".into(),
+            name: "stream_tool".into(),
+            input: serde_json::json!({}),
+        };
+
+        let collected = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let collected_clone = Arc::clone(&collected);
+
+        let results = runtime
+            .execute_batch_streaming(&[call], move |_id, chunk| {
+                let c = collected_clone.clone();
+                let chunk = chunk.to_string();
+                tokio::spawn(async move {
+                    c.lock().await.push(chunk);
+                });
+            })
+            .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].is_error);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        let final_chunks = collected.lock().await;
+        assert_eq!(
+            final_chunks.len(),
+            2,
+            "streaming callback should have 2 chunks"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_batch_streaming_empty() {
+        let registry = make_streaming_registry();
+        let runtime = ToolRuntime::new_without_permissions(registry);
+        let results = runtime.execute_batch_streaming(&[], |_, _| {}).await;
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn execute_batch_streaming_unknown_tool() {
+        let registry = make_streaming_registry();
+        let runtime = ToolRuntime::new_without_permissions(registry);
+        let call = ToolCall {
+            id: "x1".into(),
+            name: "nonexistent".into(),
+            input: serde_json::json!({}),
+        };
+        let results = runtime.execute_batch_streaming(&[call], |_, _| {}).await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_error);
+    }
 }

@@ -1714,4 +1714,57 @@ mod tests {
         // Toggle capability does not set reasoning_effort on the request.
         assert_eq!(captured[0].reasoning_effort, None);
     }
+
+    #[tokio::test]
+    async fn query_tool_result_summary_is_set() {
+        let mut builder = ToolRegistryBuilder::new();
+        builder.register_handler("mutating_tool", Arc::new(MutatingTool));
+        builder.push_spec(ToolSpec {
+            name: "mutating_tool".into(),
+            description: String::new(),
+            input_schema: JsonSchema::object(Default::default(), None, None),
+            output_mode: ToolOutputMode::Text,
+            execution_mode: ToolExecutionMode::Mutating,
+            capability_tags: vec![],
+            supports_parallel: false,
+        });
+        let registry = Arc::new(builder.build());
+        let runtime = ToolRuntime::new_without_permissions(Arc::clone(&registry));
+
+        let mut session = SessionState::new(SessionConfig::default(), std::env::temp_dir());
+        session.push_message(Message::user("run the tool"));
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_clone = Arc::clone(&seen);
+        let callback = Arc::new(move |event: QueryEvent| {
+            if let QueryEvent::ToolResult { summary, .. } = event {
+                seen_clone.lock().unwrap().push(summary);
+            }
+        });
+
+        query(
+            &mut session,
+            &TurnConfig {
+                model: Model::default(),
+                thinking_selection: None,
+            },
+            Arc::new(SingleToolUseProvider {
+                requests: AtomicUsize::new(0),
+            }),
+            registry,
+            &runtime,
+            Some(callback),
+        )
+        .await
+        .expect("query should complete");
+
+        let summaries = seen.lock().unwrap();
+        assert!(
+            !summaries.is_empty(),
+            "should have at least one ToolResult summary"
+        );
+        for summary in summaries.iter() {
+            assert!(!summary.is_empty(), "summary should not be empty");
+        }
+    }
 }
