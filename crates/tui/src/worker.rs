@@ -815,12 +815,9 @@ async fn run_worker_inner(
                                     && matches!(payload.item.item_kind, ItemKind::ToolCall)
                                         && let Ok(payload) = serde_json::from_value::<ToolCallPayload>(payload.item.payload) {
                                             let summary = summarize_tool_call(&payload);
-                                            let detail = Some(render_json_preview(&payload.parameters))
-                                                .filter(|detail: &String| !detail.is_empty());
                                             let _ = event_tx.send(WorkerEvent::ToolCall {
                                                 tool_use_id: payload.tool_call_id,
                                                 summary,
-                                                detail,
                                             });
                                         }
                                 }
@@ -1258,7 +1255,7 @@ fn fmt_offset_limit(input: &serde_json::Value) -> String {
 
 fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
     let candidate = match tool_name {
-        "bash" => input
+        "bash" | "shell_command" | "exec_command" => input
             .get("command")
             .and_then(serde_json::Value::as_str)
             .or_else(|| input.get("cmd").and_then(serde_json::Value::as_str))
@@ -1277,6 +1274,34 @@ fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
             .and_then(serde_json::Value::as_str)
             .or_else(|| input.get("filePath").and_then(serde_json::Value::as_str))
             .map(make_path_relative),
+        "grep" => {
+            let pattern = input
+                .get("pattern")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let path = input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(make_path_relative);
+            match path {
+                Some(p) => Some(format!("'{pattern}' in {p}")),
+                None => Some(format!("'{pattern}'")),
+            }
+        }
+        "glob" => {
+            let pattern = input
+                .get("pattern")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let path = input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(make_path_relative);
+            match path {
+                Some(p) => Some(format!("{pattern} in {p}")),
+                None => Some(pattern.to_string()),
+            }
+        }
         "webfetch" | "websearch" => input
             .get("url")
             .and_then(serde_json::Value::as_str)
@@ -1287,6 +1312,30 @@ fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
                     .and_then(serde_json::Value::as_str)
                     .map(|s| s.to_string())
             }),
+        "lsp" => {
+            let path = input
+                .get("filePath")
+                .and_then(serde_json::Value::as_str)
+                .map(make_path_relative);
+            let line = input.get("line").and_then(|v| v.as_i64());
+            let col = input.get("character").and_then(|v| v.as_i64());
+            match (path, line, col) {
+                (Some(p), Some(l), Some(c)) => Some(format!("{p}:{l}:{c}")),
+                (Some(p), Some(l), None) => Some(format!("{p}:{l}")),
+                (Some(p), None, _) => Some(p),
+                _ => None,
+            }
+        }
+        "task" => input
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .map(|s| s.to_string()),
+        "question" => None,
+        "todowrite" => None,
+        "skill" => input
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(|s| s.to_string()),
         _ => None,
     };
 

@@ -222,14 +222,8 @@ impl TurnProjector for DefaultProjection {
 }
 
 fn summarize_tool_call(tool_name: &str, input: &serde_json::Value) -> String {
-    match tool_name {
-        "bash" => input
-            .get("command")
-            .and_then(serde_json::Value::as_str)
-            .map(|command| format!("Ran {command}"))
-            .unwrap_or_else(|| "Ran shell command".to_string()),
-        other => format!("Ran {other}"),
-    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    devo_tools::tool_summary::tool_summary(tool_name, input, &cwd).replacen(": ", " ", 1)
 }
 
 fn summarize_tool_result(tool_name: Option<&str>, is_error: bool) -> String {

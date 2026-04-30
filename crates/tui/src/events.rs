@@ -69,8 +69,6 @@ pub(crate) enum WorkerEvent {
         tool_use_id: String,
         /// Human-readable summary line for the tool execution.
         summary: String,
-        /// Optional structured input preview for the tool call.
-        detail: Option<String>,
     },
     /// Incremental output delta from a running tool.
     ToolOutputDelta {

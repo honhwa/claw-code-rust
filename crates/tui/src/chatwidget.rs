@@ -276,11 +276,17 @@ impl ChatWidget {
     }
 
     fn completed_dot_prefix() -> Line<'static> {
-        Line::from("• ".cyan())
+        Line::from(vec![
+            Span::styled("▌", Style::default().fg(Color::Rgb(120, 220, 160))),
+            " ".into(),
+        ])
     }
 
     fn pending_dot_prefix() -> Line<'static> {
-        Line::from("• ".cyan())
+        Line::from(vec![
+            Span::styled("▌", Style::default().fg(Color::Rgb(110, 200, 255))),
+            " ".into(),
+        ])
     }
 
     fn truncate_display_text(value: &str, max_chars: usize) -> String {
@@ -304,17 +310,14 @@ impl ChatWidget {
     }
 
     fn tool_text_style() -> Style {
-        Style::default().fg(Color::Rgb(176, 176, 176))
+        Style::default().fg(Color::Rgb(160, 163, 168))
     }
 
-    fn running_tool_prefix_style() -> Style {
-        Style::default()
-            .fg(Color::Rgb(110, 200, 255))
-            .bold()
-            .italic()
+    fn tool_status_running_style() -> Style {
+        Style::default().fg(Color::Rgb(106, 200, 255)).bold()
     }
 
-    fn ran_tool_prefix_style() -> Style {
+    fn tool_status_done_style() -> Style {
         Style::default().fg(Color::Rgb(120, 220, 160)).bold()
     }
 
@@ -324,7 +327,7 @@ impl ChatWidget {
             .or_else(|| title.strip_prefix("Ran "))
             .unwrap_or(title);
         Line::from(vec![
-            Span::styled("Running ", Self::running_tool_prefix_style()),
+            Span::styled("Running ", Self::tool_status_running_style()),
             Span::styled(normalized.to_string(), Self::tool_text_style()),
         ])
     }
@@ -335,17 +338,23 @@ impl ChatWidget {
             .or_else(|| title.strip_prefix("Ran "))
             .unwrap_or(title);
         Line::from(vec![
-            Span::styled("Ran ", Self::ran_tool_prefix_style()),
+            Span::styled("Ran ", Self::tool_status_done_style()),
             Span::styled(normalized.to_string(), Self::tool_text_style()),
         ])
     }
 
     fn tool_dot_prefix() -> Line<'static> {
-        Line::from("• ".green())
+        Line::from(vec![
+            Span::styled("▌", Style::default().fg(Color::Rgb(120, 220, 160))),
+            " ".into(),
+        ])
     }
 
     fn failed_dot_prefix() -> Line<'static> {
-        Line::from("• ").red()
+        Line::from(vec![
+            Span::styled("▌", Style::default().fg(Color::Rgb(255, 110, 110))),
+            " ".into(),
+        ])
     }
 
     fn dot_prefix(status: DotStatus) -> Line<'static> {
@@ -778,17 +787,10 @@ impl ChatWidget {
             WorkerEvent::ToolCall {
                 tool_use_id,
                 summary,
-                detail,
             } => {
                 // Do not commit active streams here — pending tool calls share the
                 // active viewport alongside reasoning/assistant text.
-                // If summary already has a key detail (e.g. "read: src/main.rs"),
-                // skip the redundant JSON preview.
-                let title = if summary.contains(": ") {
-                    summary
-                } else {
-                    detail.unwrap_or_else(|| summary.clone())
-                };
+                let title = summary;
                 let tool_call = ActiveToolCall {
                     tool_use_id: tool_use_id.clone(),
                     title: title.clone(),

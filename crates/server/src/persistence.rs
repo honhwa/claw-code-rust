@@ -1089,7 +1089,7 @@ mod tests {
         );
 
         assert_eq!(history_items.len(), 2);
-        assert_eq!(history_items[0].title, "Ran read");
+        assert_eq!(history_items[0].title, "read /tmp/test.txt");
         assert_eq!(history_items[1].title, "read output");
     }
 
